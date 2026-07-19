@@ -110,6 +110,12 @@ static void PrintUsage(const char* exe)
               << "  --log-file <path>       Consolidated text log file\n"
               << "  --run-count <N>         Perf test iteration count (default: 40)\n"
               << "  --timeout <seconds>     Per-test process timeout (default: no timeout)\n"
+              << "  --gpu-name <string>     Adapter name of the GPU under test (e.g. 'NVIDIA GeForce RTX 3060 Ti').\n"
+              << "                          Used for manifest 'skip_on_gpu' matching. Optional.\n"
+              << "  --gbv-max-mb <N>        Max .zst file size (MB) for GBV scenarios to run against (default: 4).\n"
+              << "                          Larger files skip Gbv and GbvSeq. Tune down if GBV runs blow the wrapper timeout.\n"
+              << "  --perf-min-mb <N>       Minimum .zst file size (MB) required for perf tests (default: 4).\n"
+              << "                          Smaller files skip perf; individually-compressed textures are not representative of throughput.\n"
               << "  --adversarial-manifest <path>   Optional JSON manifest of known-adversarial fuzz files.\n"
               << "                                  If NOT specified, the wrapper auto-discovers the manifest at\n"
               << "                                  <content-path>/adversarial_manifest.json. If found (either way),\n"
@@ -129,6 +135,20 @@ static int Fail(const std::string& msg)
     std::cerr << "Error: " << msg << std::endl;
     return 1;
 }
+
+// Google Test event listener that prints a horizontal separator between tests.
+// Fires after each test's terminator ([  OK  ] / [  FAILED  ] / [  SKIPPED  ])
+// and before the next test's [ RUN      ] line, so consecutive tests are
+// visually distinct in the log without changing GTest's default output format.
+// One-liner design — no state, no config, safe to append as a UnitTest listener.
+class BlockSeparatorListener : public ::testing::EmptyTestEventListener
+{
+public:
+    void OnTestEnd(const ::testing::TestInfo& /*info*/) override
+    {
+        std::cout << "\n" << std::string(72, '-') << "\n" << std::endl;
+    }
+};
 
 // Parse custom flags out of argv before we hand argv to GTest. GTest's own
 // InitGoogleTest() runs later and will consume its own flags (e.g.
@@ -170,6 +190,22 @@ static bool ParseArgs(int argc, char** argv, TestConfig& config, bool& shouldExi
         else if (std::strcmp(argv[i], "--adversarial-manifest") == 0 && i + 1 < argc)
         {
             config.adversarialManifestPath = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--gpu-name") == 0 && i + 1 < argc)
+        {
+            config.gpuName = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--gbv-max-mb") == 0 && i + 1 < argc)
+        {
+            config.gbvMaxMB = std::atoi(argv[++i]);
+            if (config.gbvMaxMB <= 0)
+                config.gbvMaxMB = 4;
+        }
+        else if (std::strcmp(argv[i], "--perf-min-mb") == 0 && i + 1 < argc)
+        {
+            config.perfMinMB = std::atoi(argv[++i]);
+            if (config.perfMinMB < 0)
+                config.perfMinMB = 0;   // 0 = disable perf-size skip; sub-1MB files still skip via > 0 check
         }
         else if (std::strcmp(argv[i], "--help-ci") == 0)
         {
@@ -306,5 +342,10 @@ int main(int argc, char** argv)
 
     testing::InitGoogleTest(&argc, argv);
     testing::GTEST_FLAG(catch_exceptions) = false;
+
+    // Insert a blank-line separator between each test's output block so runs
+    // are visually distinguishable in the log. Cleanup owned by gtest.
+    ::testing::UnitTest::GetInstance()->listeners().Append(new BlockSeparatorListener);
+
     return RUN_ALL_TESTS();
 }

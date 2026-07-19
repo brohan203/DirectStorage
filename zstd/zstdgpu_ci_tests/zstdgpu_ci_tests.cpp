@@ -10,17 +10,28 @@
 // Test definitions and demo runner for the Zstd GPU CI tests.
 //
 // Parameterized test suite (ZstdGpuDemoTests) instantiated once per .zst file
-// under the content path. Each file produces 6 scenarios:
+// under the content path. The scenario set follows the "for all data" matrix
+// from the DS/ATG spec (all 8 correctness runs per file, minus GBV on large
+// files), plus one performance scenario and two defensive holdovers.
 //
-//   Correctness (ASSERT — hard fail):
-//     - SimulationCheck  : --sim-gpu with CPU+GPU validation
-//     - D3D12DebugLayer  : --d3d-dbg
-//     - ExternalMemory   : --ext-mem
-//     - GraphicsQueue    : --d3d-gfx
+//   Correctness (ASSERT — hard fail) — runs on every file:
+//     - GpuCheck             : --chk-gpu
+//     - GpuCheckSeq          : --chk-gpu --seq-cnt
+//     - D3D12DebugLayer      : --chk-gpu --d3d-dbg                          [ARM: skipped]
+//     - D3D12DebugLayerSeq   : --chk-gpu --d3d-dbg --seq-cnt                [ARM: skipped]
+//     - SimulationCheck      : --chk-gpu --chk-cpu --sim-gpu
+//     - SimulationCheckSeq   : --chk-gpu --chk-cpu --sim-gpu --seq-cnt
+//     - ExternalMemory       : --chk-gpu --ext-mem                         (kept — --ext-mem coverage is orthogonal to the seq-matrix)
+//     - GraphicsQueue        : --chk-gpu --d3d-gfx                         (kept — retained for defensive coverage)
+//     - Ssm                  : --chk-gpu --ssm                             (exploration — auto scratch estimation; for review)
 //
-//   Performance (EXPECT — soft fail, also verify CSV output was written):
-//     - OverallThroughput: --prf-lvl 0 → results/throughput_<stem>.csv
-//     - PerStageTiming   : --prf-lvl 2 → results/stages_<stem>.csv
+//   Correctness (ASSERT) — runs only on files <= --gbv-max-mb (default 4 MB):
+//     - Gbv                  : --chk-gpu --d3d-dbg --d3d-gbv               [ARM: skipped]
+//     - GbvSeq               : --chk-gpu --d3d-dbg --d3d-gbv --seq-cnt     [ARM: skipped]
+//
+//   Performance (EXPECT — soft fail, also verifies CSV output was written) —
+//     skips files under 'fuzz/' AND files smaller than --perf-min-mb (default 4 MB):
+//     - PerStageTiming       : --prf-lvl 2 --d3d-gfx --seq-cnt  → results/stages_<stem>.csv
 
 #include "zstdgpu_ci_tests.h"
 #include <gtest/gtest.h>
@@ -63,7 +74,8 @@ namespace
         const std::string& zstFile,
         int profilingLevel,
         int runCount,
-        const std::string& csvOutputPath);
+        const std::string& csvOutputPath,
+        const std::vector<std::string>& extraFlags);
 }
 
 // Helpers
@@ -161,42 +173,85 @@ static bool IsFuzzContent(const std::string& zstFile)
     return false;
 }
 
-// If the adversarial manifest lists this file, verify that the demo rejected it
-// with the expected exit code. Returns true iff the outcome is a correct
-// rejection, or false if the file isn't in the manifest (in which case the
-// caller applies the legacy "expect 0" check). Sets handledByManifest when a
-// manifest entry matched, and adds a gtest failure on mismatch.
-static bool CheckAdversarialOrLegacy(const std::string& zstFile, const DemoResult& result, bool& handledByManifest)
+// Returns true if the .zst file is small enough for the Gbv/GbvSeq scenarios
+// to run against it. GBV multiplies per-dispatch cost 20-50x on some drivers
+// so it's only affordable on small inputs; large concat batches would blow
+// the wrapper timeout. Threshold is --gbv-max-mb (default 4 MB).
+//
+// On a stat error (permissions, race, network path glitch) returns false —
+// safer to skip GBV than to blindly run it on a possibly-huge file we can't
+// size.
+static bool IsSmallForGbv(const std::string& zstFile)
 {
-    handledByManifest = false;
-    const AdversarialEntry* entry = g_testConfig.adversarialManifest.Match(zstFile, g_testConfig.contentPath);
-    if (!entry)
-        return false;
-
-    handledByManifest = true;
-
-    if (result.exitCode != entry->expectedExitCode)
-    {
-        ADD_FAILURE()
-            << "Adversarial file expected to be rejected with exit code "
-            << entry->expectedExitCode << " but demo returned " << result.exitCode << ".\n"
-            << "File: " << zstFile << "\n"
-            << "Reason: " << entry->reason << "\n"
-            << "Command: " << result.commandLine
-            << "  (stdout already printed above as [DEMO OUT])";
-        return false;
-    }
-
-    return true;
+    std::error_code ec;
+    auto size = std::filesystem::file_size(zstFile, ec);
+    if (ec) return false;
+    return size <= static_cast<uintmax_t>(g_testConfig.gbvMaxMB) * 1024ULL * 1024ULL;
 }
 
-// Run a correctness scenario. Spawns zstdgpu_demo.exe with the given .zst file and scenario flags, then asserts exit code == 0.
+// Returns true if the .zst file is too small for perf tests to produce
+// representative timing data. Individually-compressed textures (typically
+// under a few MB) don't fill enough of the GPU pipeline to expose throughput
+// characteristics. Threshold is --perf-min-mb (default 4 MB); set to 0 to
+// disable this skip.
+//
+// On a stat error, returns false — we err toward running perf when we can't
+// tell the size, so the failure surfaces in logs instead of silently skipping.
+static bool IsSmallForPerf(const std::string& zstFile)
+{
+    if (g_testConfig.perfMinMB <= 0) return false;
+    std::error_code ec;
+    auto size = std::filesystem::file_size(zstFile, ec);
+    if (ec) return false;
+    return size < static_cast<uintmax_t>(g_testConfig.perfMinMB) * 1024ULL * 1024ULL;
+}
+
+// Returns the name of the currently-running test (e.g. "SimulationCheck").
+// Used to feed AdversarialManifest::EntryTargetsSkip for scenario-scoped skips.
+static std::string CurrentScenarioName()
+{
+    if (auto* info = ::testing::UnitTest::GetInstance()->current_test_info())
+        return info->name();
+    return "";
+}
+
+// Emits GTEST_SKIP for a manifest-declared GPU/scenario skip. Composes a
+// diagnostic that includes the reason and (if present) the tracking bug so
+// operators can find the owner without opening the manifest.
+static void SkipForManifestGpuTarget(const AdversarialEntry& entry)
+{
+    std::string msg = "Skipped on GPU '" + g_testConfig.gpuName +
+                      "' per adversarial manifest. Reason: " + entry.reason;
+    if (!entry.trackingBug.empty())
+    {
+        msg += " (Tracking: " + entry.trackingBug + ")";
+    }
+    GTEST_SKIP() << msg;
+}
+
+// Run a correctness scenario. First consults the manifest for a GPU-conditional
+// skip; if none applies, spawns zstdgpu_demo.exe and asserts on the outcome
+// (either "exit == expected_exit_code" for adversarial entries, or exit == 0
+// for legacy/non-matched entries).
+//
 // main() has already validated the demo path exists, so we don't re-check here.
 // stdout is printed via the unconditional [DEMO OUT] block below and does NOT
 // appear a second time in the ASSERT_EQ failure message — that would duplicate
 // the same text in the log.
 static void RunCorrectnessTest(const std::string& zstFile, const std::vector<std::string>& scenarioFlags)
 {
+    // Manifest lookup happens once. Two orthogonal checks:
+    //   1. skip_on_gpu: skip the test entirely before spawning the demo
+    //   2. expected_exit_code: score the demo's rejection (or lack thereof)
+    const AdversarialEntry* entry =
+        g_testConfig.adversarialManifest.Match(zstFile, g_testConfig.contentPath);
+
+    if (entry && AdversarialManifest::EntryTargetsSkip(*entry, g_testConfig.gpuName, CurrentScenarioName()))
+    {
+        SkipForManifestGpuTarget(*entry);
+        return;
+    }
+
     auto args = BuildCorrectnessArgs(zstFile, scenarioFlags);
     auto result = RunDemo(g_testConfig.demoPath, args, g_testConfig.timeoutSeconds);
 
@@ -219,21 +274,26 @@ static void RunCorrectnessTest(const std::string& zstFile, const std::vector<std
         << "Failed to launch demo: " << result.launchError << "\n"
         << "Command: " << result.commandLine;
 
-    bool handledByManifest = false;
-    if (CheckAdversarialOrLegacy(zstFile, result, handledByManifest))
+    // Adversarial path: manifest entry matched AND declares a non-zero expected
+    // exit code. Score against it.
+    if (entry && entry->expectedExitCode > 0)
     {
-        // Adversarial file rejected as expected — success. Nothing more to check.
-        return;
-    }
-    if (handledByManifest)
-    {
-        // Manifest entry matched but the outcome didn't match. CheckAdversarialOrLegacy
-        // already added the failure diagnostic. Stop here rather than fall through
-        // to the legacy check (which would produce a redundant "exit != 0" failure).
+        if (result.exitCode != entry->expectedExitCode)
+        {
+            ADD_FAILURE()
+                << "Adversarial file expected to be rejected with exit code "
+                << entry->expectedExitCode << " but demo returned " << result.exitCode << ".\n"
+                << "File: " << zstFile << "\n"
+                << "Reason: " << entry->reason << "\n"
+                << "Command: " << result.commandLine
+                << "  (stdout already printed above as [DEMO OUT])";
+        }
         return;
     }
 
-    // Legacy path: file not in manifest, expect success.
+    // Legacy path: no manifest match, OR match with expected_exit_code == 0
+    // (i.e. entry existed only to declare a GPU-conditional skip that didn't
+    // apply on this GPU). Expect the demo to succeed.
     ASSERT_EQ(result.exitCode, 0)
         << "Demo process returned non-zero exit code: " << result.exitCode << "\n"
         << "Command: " << result.commandLine
@@ -242,7 +302,8 @@ static void RunCorrectnessTest(const std::string& zstFile, const std::vector<std
 
 // Run a performance scenario. Spawns zstdgpu_demo.exe with profiling flags and requests CSV output. Uses EXPECT (not ASSERT) to verify the demo executed successfully and produced CSV output.
 // main() has already validated the demo path exists.
-static void RunPerformanceTest(const std::string& zstFile, int profilingLevel)
+static void RunPerformanceTest(const std::string& zstFile, int profilingLevel,
+                                const std::vector<std::string>& extraFlags)
 {
     // Fuzzing content mixes clean and corrupt inputs with varying code paths,
     // so its timing isn't meaningful perf data — skip it before running the demo.
@@ -254,19 +315,30 @@ static void RunPerformanceTest(const std::string& zstFile, int profilingLevel)
         return;
     }
 
-    // Build CSV output path matching spec convention:
-    //   prf-lvl 0 → results/throughput_<stem>.csv
-    //   prf-lvl 2 → results/stages_<stem>.csv
+    // Skip individually-compressed textures: too small to fill the GPU pipeline
+    // enough to produce representative throughput numbers. Threshold is
+    // --perf-min-mb.
+    if (IsSmallForPerf(zstFile))
+    {
+        GTEST_SKIP()
+            << "Perf test skipped: file is under --perf-min-mb ("
+            << g_testConfig.perfMinMB << " MB) — not representative for throughput.\n"
+            << "File: " << zstFile;
+        return;
+    }
+
+    // Build CSV output path. Only one perf scenario exists today (PerStageTiming),
+    // so the "throughput_/stages_" prefix distinction from earlier is no longer
+    // needed — plain stages_<stem>.csv is enough.
     std::string stem = std::filesystem::path(zstFile).stem().string();
-    std::string prefix = (profilingLevel == 0) ? "throughput" : "stages";
     std::filesystem::path resultsDir = std::filesystem::path(g_testConfig.logDir) / "results";
     if (!std::filesystem::exists(resultsDir))
     {
         std::filesystem::create_directories(resultsDir);
     }
-    std::string csvPath = (resultsDir / (prefix + "_" + stem + ".csv")).string();
+    std::string csvPath = (resultsDir / ("stages_" + stem + ".csv")).string();
 
-    auto args = BuildPerformanceArgs(zstFile, profilingLevel, g_testConfig.runCount, csvPath);
+    auto args = BuildPerformanceArgs(zstFile, profilingLevel, g_testConfig.runCount, csvPath, extraFlags);
     auto result = RunDemo(g_testConfig.demoPath, args, g_testConfig.timeoutSeconds);
 
     // Write to log file before assertions so logs are captured even if a check fails.
@@ -288,8 +360,8 @@ static void RunPerformanceTest(const std::string& zstFile, int profilingLevel)
         << "Failed to launch demo: " << result.launchError << "\n"
         << "Command: " << result.commandLine;
 
-    // Fuzz content was already skipped above, so any file reaching here is
-    // expected to decode successfully AND produce a CSV.
+    // Fuzz content and undersized files were already skipped above, so any file
+    // reaching here is expected to decode successfully AND produce a CSV.
     EXPECT_EQ(result.exitCode, 0)
         << "Demo process returned non-zero exit code: " << result.exitCode << "\n"
         << "Command: " << result.commandLine
@@ -312,11 +384,20 @@ class ZstdGpuDemoTests : public ::testing::TestWithParam<std::string>
 {
 };
 
-// --- Correctness tests ---
+// --- Correctness tests — "for all data" matrix ---
 
-TEST_P(ZstdGpuDemoTests, SimulationCheck)
+// Baseline GPU correctness check without debug layer or CPU-sim overhead.
+// Cheapest correctness signal per file.
+TEST_P(ZstdGpuDemoTests, GpuCheck)
 {
-    RunCorrectnessTest(GetParam(), {"--chk-gpu", "--chk-cpu", "--sim-gpu"});
+    RunCorrectnessTest(GetParam(), {"--chk-gpu"});
+}
+
+// Same as GpuCheck but forces single-submission mode via --seq-cnt (implies
+// --blk-cnt — pre-scanned block counts feed SetupBlockInfoConstants).
+TEST_P(ZstdGpuDemoTests, GpuCheckSeq)
+{
+    RunCorrectnessTest(GetParam(), {"--chk-gpu", "--seq-cnt"});
 }
 
 TEST_P(ZstdGpuDemoTests, D3D12DebugLayer)
@@ -328,26 +409,97 @@ TEST_P(ZstdGpuDemoTests, D3D12DebugLayer)
 #endif
 }
 
+TEST_P(ZstdGpuDemoTests, D3D12DebugLayerSeq)
+{
+#if defined(_M_ARM) || defined(_M_ARM64) || defined(_M_ARM64EC)
+    GTEST_SKIP() << "D3D12 debug layer tests are skipped on ARM platforms.";
+#else
+    RunCorrectnessTest(GetParam(), {"--chk-gpu", "--d3d-dbg", "--seq-cnt"});
+#endif
+}
+
+TEST_P(ZstdGpuDemoTests, SimulationCheck)
+{
+    RunCorrectnessTest(GetParam(), {"--chk-gpu", "--chk-cpu", "--sim-gpu"});
+}
+
+TEST_P(ZstdGpuDemoTests, SimulationCheckSeq)
+{
+    RunCorrectnessTest(GetParam(), {"--chk-gpu", "--chk-cpu", "--sim-gpu", "--seq-cnt"});
+}
+
+// Retained for defensive coverage of --ext-mem (external heap allocation).
+// This dimension is orthogonal to the --seq-cnt / --d3d-dbg matrix, and is
+// not in the "for all data" baseline spec.
 TEST_P(ZstdGpuDemoTests, ExternalMemory)
 {
     RunCorrectnessTest(GetParam(), {"--chk-gpu", "--ext-mem"});
 }
 
+// Retained for defensive coverage of the D3D12 Graphics queue (DIRECT).
+// Perf tests also pass --d3d-gfx, but this is the only pure-correctness path
+// that exercises the DIRECT queue.
 TEST_P(ZstdGpuDemoTests, GraphicsQueue)
 {
     RunCorrectnessTest(GetParam(), {"--chk-gpu", "--d3d-gfx"});
 }
 
-// --- Performance tests ---
-
-TEST_P(ZstdGpuDemoTests, OverallThroughput)
+// Exploration scenario for the "predicted memory allocation" mode: --ssm
+// forces single-submission with automatic scratch estimation (no pre-scan
+// counts). Complements the --seq-cnt path which is single-submission with
+// exact pre-scanned block counts. Kept in the suite to surface any behavior
+// difference between the two allocation strategies.
+TEST_P(ZstdGpuDemoTests, Ssm)
 {
-    RunPerformanceTest(GetParam(), 0);
+    RunCorrectnessTest(GetParam(), {"--chk-gpu", "--ssm"});
 }
 
+// --- Correctness tests — GBV, small-file only ---
+
+// GBV ("GPU-Based Validation") is expensive; it multiplies per-dispatch cost
+// dramatically on some drivers. Only run on files <= --gbv-max-mb so the
+// wrapper stays inside its timeout on large concat batches.
+TEST_P(ZstdGpuDemoTests, Gbv)
+{
+#if defined(_M_ARM) || defined(_M_ARM64) || defined(_M_ARM64EC)
+    GTEST_SKIP() << "D3D12 debug layer tests are skipped on ARM platforms.";
+#else
+    if (!IsSmallForGbv(GetParam()))
+    {
+        GTEST_SKIP() << "GBV skipped: file exceeds --gbv-max-mb ("
+                     << g_testConfig.gbvMaxMB << " MB).";
+        return;
+    }
+    // Passing --d3d-dbg explicitly matches the ATG spec even though --d3d-gbv
+    // implies it — defensive against a future demo change that decouples them.
+    RunCorrectnessTest(GetParam(), {"--chk-gpu", "--d3d-dbg", "--d3d-gbv"});
+#endif
+}
+
+TEST_P(ZstdGpuDemoTests, GbvSeq)
+{
+#if defined(_M_ARM) || defined(_M_ARM64) || defined(_M_ARM64EC)
+    GTEST_SKIP() << "D3D12 debug layer tests are skipped on ARM platforms.";
+#else
+    if (!IsSmallForGbv(GetParam()))
+    {
+        GTEST_SKIP() << "GBV skipped: file exceeds --gbv-max-mb ("
+                     << g_testConfig.gbvMaxMB << " MB).";
+        return;
+    }
+    RunCorrectnessTest(GetParam(), {"--chk-gpu", "--d3d-dbg", "--d3d-gbv", "--seq-cnt"});
+#endif
+}
+
+// --- Performance tests ---
+
+// Detailed per-pass timings via --prf-lvl 2, on the DIRECT queue (--d3d-gfx)
+// in single-submission mode (--seq-cnt). Skips fuzz content and files smaller
+// than --perf-min-mb (individually-compressed textures are too small to be
+// representative of end-to-end throughput).
 TEST_P(ZstdGpuDemoTests, PerStageTiming)
 {
-    RunPerformanceTest(GetParam(), 2);
+    RunPerformanceTest(GetParam(), 2, {"--d3d-gfx", "--seq-cnt"});
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -510,12 +662,15 @@ std::vector<std::string> BuildCorrectnessArgs(
 }
 
 // Builds argument list for performance tests: run N iterations at the specified
-// profiling level, optionally writing per-run timing data to a CSV file.
+// profiling level, optionally writing per-run timing data to a CSV file. The
+// scenario supplies any additional demo flags in `extraFlags` (e.g. --d3d-gfx
+// and --seq-cnt for the PerStageTiming scenario).
 std::vector<std::string> BuildPerformanceArgs(
     const std::string& zstFile,
     int profilingLevel,
     int runCount,
-    const std::string& csvOutputPath)
+    const std::string& csvOutputPath,
+    const std::vector<std::string>& extraFlags)
 {
     std::vector<std::string> args;
     args.push_back("--zst");
@@ -528,6 +683,10 @@ std::vector<std::string> BuildPerformanceArgs(
     {
         args.push_back("--out-csv");
         args.push_back(csvOutputPath);
+    }
+    for (const auto& flag : extraFlags)
+    {
+        args.push_back(flag);
     }
     return args;
 }

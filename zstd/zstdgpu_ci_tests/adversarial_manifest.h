@@ -28,11 +28,30 @@
 // One entry describes an expected outcome for a set of files matched by
 // path_glob (relative to --content-path). See adversarial_manifest.json for
 // the shipping schema and field semantics.
+//
+// Two orthogonal purposes served by the same entry shape:
+//
+//   1. Adversarial rejection (default): file is expected to be rejected by
+//      the demo with `expectedExitCode`. Set expectedExitCode > 0.
+//
+//   2. Driver/hardware-conditional skip: if `skipOnGpu` is non-empty AND at
+//      least one pattern matches the CURRENT GPU (--gpu-name at wrapper
+//      startup), the test is GTEST_SKIP'd with `reason` and optional
+//      `trackingBug` cited. If `skipScenarios` is non-empty, the skip is
+//      restricted to those scenario names; empty means all scenarios.
+//
+// Both can coexist: an entry with expectedExitCode=1 AND skipOnGpu=["*GTX 1060*"]
+// means "adversarial on most machines, but skip on GTX 1060 (probably a driver
+// bug we're tracking separately)". Skip-on-gpu is checked BEFORE the demo is
+// spawned so no cycles are wasted running a known-broken combination.
 struct AdversarialEntry
 {
     std::string pathGlob;                          // e.g. "public/fuzz/generated/gen_bitflip_off0[0-3]_*.zst"
     std::string reason;                            // Human-readable description of what's wrong with the file(s) (JSON key "reason")
-    int expectedExitCode = 1;                      // Expected demo process exit code (always 1 today; field exists for future flexibility)
+    int expectedExitCode = 1;                      // Expected demo process exit code when NOT skipped (0 = don't check, non-zero = adversarial rejection)
+    std::vector<std::string> skipOnGpu;            // Optional GPU-name glob patterns; if any match the current gpuName, wrapper skips the test
+    std::vector<std::string> skipScenarios;        // Optional scenario names limiting the skip; empty = all scenarios (only meaningful when skipOnGpu non-empty)
+    std::string trackingBug;                       // Optional reference for the skip (bug ID, TSG link, etc.) — printed in the skip diagnostic
 };
 
 // Loads and matches the manifest. Loaded once at startup, then read-only from
@@ -64,6 +83,16 @@ public:
     // from a working one and silently disables the adversarial-rejection checks).
     size_t CountCoverage(const std::vector<std::string>& files,
                          const std::filesystem::path& contentPath) const;
+
+    // Returns true if `entry` declares a skip that applies to (gpuName, scenarioName).
+    // Preconditions: entry.skipOnGpu non-empty AND gpuName non-empty. If entry
+    // .skipScenarios is empty, all scenarios are in scope; otherwise only the
+    // listed names are. GPU-name matching uses the same glob syntax as pathGlob
+    // (`*` wildcards and `[a-b]` ranges), unanchored — a pattern like
+    // "*GTX 1060*" matches anywhere in the adapter string.
+    static bool EntryTargetsSkip(const AdversarialEntry& entry,
+                                  const std::string& gpuName,
+                                  const std::string& scenarioName);
 
 private:
     std::vector<AdversarialEntry> m_entries;

@@ -29,8 +29,11 @@ struct TestConfig
     std::string logDir;                         // Directory for logs, CSVs, and GTest XML output
     std::string logFile;                        // Consolidated text log file path (--log-file)
     std::string adversarialManifestPath;        // Optional path to adversarial_manifest.json (--adversarial-manifest)
+    std::string gpuName;                        // GPU adapter name for driver/hardware-conditional manifest skips (--gpu-name)
     int runCount = 40;                          // Number of iterations for performance tests
     int timeoutSeconds = 0;                     // Max seconds before killing a demo process (0 = no timeout)
+    int gbvMaxMB = 4;                           // Max .zst size (MB) for which the Gbv/GbvSeq scenarios run. Larger files skip them.
+    int perfMinMB = 4;                          // Min .zst size (MB) required for perf tests. Smaller files skip perf (individually-compressed textures are not representative).
 
     // Cached list of .zst files discovered under contentPath. Populated once
     // in main() after validation; consumed by GetTestFiles() at fixture

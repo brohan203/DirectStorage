@@ -160,6 +160,26 @@ struct Parser
         return false;
     }
 
+    // Reads a JSON array of strings into `out`. Empty array is valid.
+    void ReadStringArray(std::vector<std::string>& out)
+    {
+        out.clear();
+        if (!SkipWs() || !Expect('[')) return;
+        if (!SkipWs()) { Fail("unexpected eof in string array"); return; }
+        if (text[pos] == ']') { ++pos; return; }
+        while (true)
+        {
+            std::string s = ReadString();
+            if (Failed()) return;
+            out.push_back(std::move(s));
+            if (!SkipWs()) { Fail("unexpected eof in string array"); return; }
+            if (text[pos] == ',') { ++pos; continue; }
+            if (text[pos] == ']') { ++pos; return; }
+            Fail("expected ',' or ']' in string array");
+            return;
+        }
+    }
+
     // Consumes a JSON value of unknown type and discards it. Used to
     // gracefully ignore unknown fields (forward compatibility — a manifest
     // written by a newer schema version that adds fields should still parse
@@ -242,6 +262,18 @@ static bool ParseEntry(Parser& p, AdversarialEntry& entry, std::string& errorOut
         else if (key == "expected_exit_code")
         {
             entry.expectedExitCode = p.ReadInt();
+        }
+        else if (key == "skip_on_gpu")
+        {
+            p.ReadStringArray(entry.skipOnGpu);
+        }
+        else if (key == "skip_scenarios")
+        {
+            p.ReadStringArray(entry.skipScenarios);
+        }
+        else if (key == "tracking_bug")
+        {
+            entry.trackingBug = p.ReadString();
         }
         else
         {
@@ -485,4 +517,42 @@ size_t AdversarialManifest::CountCoverage(const std::vector<std::string>& files,
     }
 
     return filesMatched;
+}
+
+bool AdversarialManifest::EntryTargetsSkip(const AdversarialEntry& entry,
+                                            const std::string& gpuName,
+                                            const std::string& scenarioName)
+{
+    // Skip-on-gpu only takes effect when both the entry AND the caller supply
+    // the required inputs. An entry with no skipOnGpu list is a normal
+    // adversarial-rejection entry; a wrapper started without --gpu-name (empty
+    // gpuName) can't evaluate GPU-conditional skips at all, so falls through
+    // to normal handling.
+    if (entry.skipOnGpu.empty()) return false;
+    if (gpuName.empty()) return false;
+
+    // If the entry restricts to specific scenario names, current scenario must
+    // be one of them. Empty skipScenarios = applies to all scenarios.
+    if (!entry.skipScenarios.empty())
+    {
+        bool inScope = false;
+        for (const auto& s : entry.skipScenarios)
+        {
+            if (s == scenarioName) { inScope = true; break; }
+        }
+        if (!inScope) return false;
+    }
+
+    // GPU match — reuse the same glob matcher as pathGlob, but unanchored on
+    // both sides. Callers typically write patterns like "*GTX 1060*" that need
+    // to match anywhere inside the adapter name, not just as a suffix. So we
+    // require the pattern to already be authored with leading/trailing '*' if
+    // partial-match semantics are wanted. This is deliberate — an author who
+    // writes "AMD Radeon RX 6900 XT" (no wildcards) gets an exact-match skip.
+    for (const auto& pattern : entry.skipOnGpu)
+    {
+        if (GlobMatch(pattern, gpuName))
+            return true;
+    }
+    return false;
 }
