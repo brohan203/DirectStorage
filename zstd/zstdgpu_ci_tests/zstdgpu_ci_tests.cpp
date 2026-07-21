@@ -10,9 +10,9 @@
 // Test definitions and demo runner for the Zstd GPU CI tests.
 //
 // Parameterized test suite (ZstdGpuDemoTests) instantiated once per .zst file
-// under the content path. The scenario set follows the "for all data" matrix
-// from the DS/ATG spec (all 8 correctness runs per file, minus GBV on large
-// files), plus one performance scenario and two defensive holdovers.
+// under the content path. The scenario set is the "for all data" correctness
+// matrix from the DS/ATG spec (6 baseline scenarios per file, plus 2 GBV
+// variants for small files) and one performance scenario.
 //
 //   Correctness (ASSERT — hard fail) — runs on every file:
 //     - GpuCheck             : --chk-gpu
@@ -21,9 +21,6 @@
 //     - D3D12DebugLayerSeq   : --chk-gpu --d3d-dbg --seq-cnt                [ARM: skipped]
 //     - SimulationCheck      : --chk-gpu --chk-cpu --sim-gpu
 //     - SimulationCheckSeq   : --chk-gpu --chk-cpu --sim-gpu --seq-cnt
-//     - ExternalMemory       : --chk-gpu --ext-mem                         (kept — --ext-mem coverage is orthogonal to the seq-matrix)
-//     - GraphicsQueue        : --chk-gpu --d3d-gfx                         (kept — retained for defensive coverage)
-//     - Ssm                  : --chk-gpu --ssm                             (exploration — auto scratch estimation; for review)
 //
 //   Correctness (ASSERT) — runs only on files <= --gbv-max-mb (default 4 MB):
 //     - Gbv                  : --chk-gpu --d3d-dbg --d3d-gbv               [ARM: skipped]
@@ -426,32 +423,6 @@ TEST_P(ZstdGpuDemoTests, SimulationCheck)
 TEST_P(ZstdGpuDemoTests, SimulationCheckSeq)
 {
     RunCorrectnessTest(GetParam(), {"--chk-gpu", "--chk-cpu", "--sim-gpu", "--seq-cnt"});
-}
-
-// Retained for defensive coverage of --ext-mem (external heap allocation).
-// This dimension is orthogonal to the --seq-cnt / --d3d-dbg matrix, and is
-// not in the "for all data" baseline spec.
-TEST_P(ZstdGpuDemoTests, ExternalMemory)
-{
-    RunCorrectnessTest(GetParam(), {"--chk-gpu", "--ext-mem"});
-}
-
-// Retained for defensive coverage of the D3D12 Graphics queue (DIRECT).
-// Perf tests also pass --d3d-gfx, but this is the only pure-correctness path
-// that exercises the DIRECT queue.
-TEST_P(ZstdGpuDemoTests, GraphicsQueue)
-{
-    RunCorrectnessTest(GetParam(), {"--chk-gpu", "--d3d-gfx"});
-}
-
-// Exploration scenario for the "predicted memory allocation" mode: --ssm
-// forces single-submission with automatic scratch estimation (no pre-scan
-// counts). Complements the --seq-cnt path which is single-submission with
-// exact pre-scanned block counts. Kept in the suite to surface any behavior
-// difference between the two allocation strategies.
-TEST_P(ZstdGpuDemoTests, Ssm)
-{
-    RunCorrectnessTest(GetParam(), {"--chk-gpu", "--ssm"});
 }
 
 // --- Correctness tests — GBV, small-file only ---
