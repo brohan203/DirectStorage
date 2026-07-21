@@ -136,35 +136,17 @@ static int Fail(const std::string& msg)
     return 1;
 }
 
-// Google Test event listener that prints a horizontal separator between tests.
-//
-// gtest fires On*End callbacks in REVERSE listener order (source:
-// GTEST_REVERSE_REPEATER_METHOD_ in gtest.cc), so a listener appended after
-// the default result printer would fire BEFORE the default's OnTestEnd — a
-// separator emitted there lands before the [  OK  ] / [  FAILED  ] terminator
-// rather than after. To land the separator cleanly BETWEEN one test's
-// terminator and the next test's [ RUN      ] line, we (1) reorder listeners
-// so this one runs BEFORE the default in listeners_, and (2) hook
-// OnTestStart (which uses forward iteration) with a first-test guard so we
-// print the separator right before every [ RUN      ] except the first.
-// Result:
-//   [  OK  ] previous test
-//   ----------------------------------------
-//   [ RUN      ] next test
+// Prints a horizontal separator between test blocks so consecutive tests are
+// visually distinct in the log. Positioned before the default result printer
+// in listeners_ (see main()) because gtest fires On*End in reverse listener
+// order. Hooked to OnTestStart with a first-test guard so separators land
+// between the previous [OK]/[FAILED] and the next [ RUN ].
 class BlockSeparatorListener : public ::testing::EmptyTestEventListener
 {
 public:
     void OnTestStart(const ::testing::TestInfo& /*info*/) override
     {
-        if (m_firstTest)
-        {
-            m_firstTest = false;
-            return;
-        }
-        // Use printf + fflush to share I/O buffering with gtest's default
-        // PrettyUnitTestResultPrinter (which also uses printf). Mixing
-        // std::cout with printf here is unreliable under pipe redirection —
-        // the two runtimes flush independently and order can invert.
+        if (m_firstTest) { m_firstTest = false; return; }
         printf("\n%s\n\n", std::string(72, '-').c_str());
         fflush(stdout);
     }
@@ -365,18 +347,12 @@ int main(int argc, char** argv)
     testing::InitGoogleTest(&argc, argv);
     testing::GTEST_FLAG(catch_exceptions) = false;
 
-    // Insert a blank-line separator between each test's output block so runs
-    // are visually distinguishable in the log. Order matters here — see the
-    // BlockSeparatorListener class comment. We put our listener BEFORE the
-    // default result printer in listeners_ by releasing the default and
-    // re-appending it after ours. gtest owns both pointers after Append.
+    // Insert BlockSeparatorListener before the default so separators land
+    // between tests (gtest fires On*End in reverse listener order).
     auto& listeners = ::testing::UnitTest::GetInstance()->listeners();
     auto* defaultPrinter = listeners.Release(listeners.default_result_printer());
     listeners.Append(new BlockSeparatorListener);
-    if (defaultPrinter)
-    {
-        listeners.Append(defaultPrinter);
-    }
+    if (defaultPrinter) listeners.Append(defaultPrinter);
 
     return RUN_ALL_TESTS();
 }

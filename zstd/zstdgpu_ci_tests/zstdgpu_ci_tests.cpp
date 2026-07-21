@@ -8,27 +8,8 @@
  */
 
 // Test definitions and demo runner for the Zstd GPU CI tests.
-//
-// Parameterized test suite (ZstdGpuDemoTests) instantiated once per .zst file
-// under the content path. The scenario set is the "for all data" correctness
-// matrix from the DS/ATG spec (6 baseline scenarios per file, plus 2 GBV
-// variants for small files) and one performance scenario.
-//
-//   Correctness (ASSERT — hard fail) — runs on every file:
-//     - GpuCheck             : --chk-gpu
-//     - GpuCheckSeq          : --chk-gpu --seq-cnt
-//     - D3D12DebugLayer      : --chk-gpu --d3d-dbg                          [ARM: skipped]
-//     - D3D12DebugLayerSeq   : --chk-gpu --d3d-dbg --seq-cnt                [ARM: skipped]
-//     - SimulationCheck      : --chk-gpu --chk-cpu --sim-gpu
-//     - SimulationCheckSeq   : --chk-gpu --chk-cpu --sim-gpu --seq-cnt
-//
-//   Correctness (ASSERT) — runs only on files <= --gbv-max-mb (default 4 MB):
-//     - Gbv                  : --chk-gpu --d3d-dbg --d3d-gbv               [ARM: skipped]
-//     - GbvSeq               : --chk-gpu --d3d-dbg --d3d-gbv --seq-cnt     [ARM: skipped]
-//
-//   Performance (EXPECT — soft fail, also verifies CSV output was written) —
-//     skips files under 'fuzz/' AND files smaller than --perf-min-mb (default 4 MB):
-//     - PerStageTiming       : --prf-lvl 2 --d3d-gfx --seq-cnt  → results/stages_<stem>.csv
+// Parameterized test suite (ZstdGpuDemoTests) instantiated once per .zst
+// file under the content path. See individual TEST_P bodies for scenarios.
 
 #include "zstdgpu_ci_tests.h"
 #include <gtest/gtest.h>
@@ -156,10 +137,7 @@ static void WriteToLogFile(const std::string& zstFile, const DemoResult& result)
 
 // Test runners
 
-// Returns true if the .zst file lives under a directory named "fuzz". Fuzzing
-// content is a mix of clean and corrupt inputs that exercise varying code
-// paths, so its timing isn't meaningful performance data — perf tests skip it.
-// This is a pure path check, independent of the manifest.
+// Fuzz content mixes clean + corrupt inputs; perf skips it.
 static bool IsFuzzContent(const std::string& zstFile)
 {
     for (const auto& part : std::filesystem::path(zstFile))
@@ -170,14 +148,7 @@ static bool IsFuzzContent(const std::string& zstFile)
     return false;
 }
 
-// Returns true if the .zst file is small enough for the Gbv/GbvSeq scenarios
-// to run against it. GBV multiplies per-dispatch cost 20-50x on some drivers
-// so it's only affordable on small inputs; large concat batches would blow
-// the wrapper timeout. Threshold is --gbv-max-mb (default 4 MB).
-//
-// On a stat error (permissions, race, network path glitch) returns false —
-// safer to skip GBV than to blindly run it on a possibly-huge file we can't
-// size.
+// GBV is expensive; only run on files <= --gbv-max-mb. Stat error -> false (skip).
 static bool IsSmallForGbv(const std::string& zstFile)
 {
     std::error_code ec;
@@ -186,14 +157,8 @@ static bool IsSmallForGbv(const std::string& zstFile)
     return size <= static_cast<uintmax_t>(g_testConfig.gbvMaxMB) * 1024ULL * 1024ULL;
 }
 
-// Returns true if the .zst file is too small for perf tests to produce
-// representative timing data. Individually-compressed textures (typically
-// under a few MB) don't fill enough of the GPU pipeline to expose throughput
-// characteristics. Threshold is --perf-min-mb (default 4 MB); set to 0 to
-// disable this skip.
-//
-// On a stat error, returns false — we err toward running perf when we can't
-// tell the size, so the failure surfaces in logs instead of silently skipping.
+// Small files don't fill the GPU pipeline enough for representative perf data.
+// --perf-min-mb <= 0 disables. Stat error -> false (fall through to perf run).
 static bool IsSmallForPerf(const std::string& zstFile)
 {
     if (g_testConfig.perfMinMB <= 0) return false;
@@ -203,8 +168,6 @@ static bool IsSmallForPerf(const std::string& zstFile)
     return size < static_cast<uintmax_t>(g_testConfig.perfMinMB) * 1024ULL * 1024ULL;
 }
 
-// Returns the name of the currently-running test (e.g. "SimulationCheck").
-// Used to feed AdversarialManifest::EntryTargetsSkip for scenario-scoped skips.
 static std::string CurrentScenarioName()
 {
     if (auto* info = ::testing::UnitTest::GetInstance()->current_test_info())
@@ -212,9 +175,6 @@ static std::string CurrentScenarioName()
     return "";
 }
 
-// Emits GTEST_SKIP for a manifest-declared GPU/scenario skip. Composes a
-// diagnostic that includes the reason and (if present) the tracking bug so
-// operators can find the owner without opening the manifest.
 static void SkipForManifestGpuTarget(const AdversarialEntry& entry)
 {
     std::string msg = "Skipped on GPU '" + g_testConfig.gpuName +
@@ -226,20 +186,12 @@ static void SkipForManifestGpuTarget(const AdversarialEntry& entry)
     GTEST_SKIP() << msg;
 }
 
-// Run a correctness scenario. First consults the manifest for a GPU-conditional
-// skip; if none applies, spawns zstdgpu_demo.exe and asserts on the outcome
-// (either "exit == expected_exit_code" for adversarial entries, or exit == 0
-// for legacy/non-matched entries).
-//
-// main() has already validated the demo path exists, so we don't re-check here.
-// stdout is printed via the unconditional [DEMO OUT] block below and does NOT
-// appear a second time in the ASSERT_EQ failure message — that would duplicate
-// the same text in the log.
+// Runs a correctness scenario: checks manifest for GPU-conditional skip, else
+// spawns the demo and asserts on the outcome (expected exit code from manifest
+// entry, or 0 for no match). Demo stdout is captured to [DEMO OUT] once and
+// deliberately not reprinted in assertion messages.
 static void RunCorrectnessTest(const std::string& zstFile, const std::vector<std::string>& scenarioFlags)
 {
-    // Manifest lookup happens once. Two orthogonal checks:
-    //   1. skip_on_gpu: skip the test entirely before spawning the demo
-    //   2. expected_exit_code: score the demo's rejection (or lack thereof)
     const AdversarialEntry* entry =
         g_testConfig.adversarialManifest.Match(zstFile, g_testConfig.contentPath);
 
@@ -252,11 +204,8 @@ static void RunCorrectnessTest(const std::string& zstFile, const std::vector<std
     auto args = BuildCorrectnessArgs(zstFile, scenarioFlags);
     auto result = RunDemo(g_testConfig.demoPath, args, g_testConfig.timeoutSeconds);
 
-    // Write to log file before assertions so logs are captured even if an ASSERT aborts early.
+    // Write log before assertions so early aborts still capture output.
     WriteToLogFile(zstFile, result);
-
-    // Log the output regardless of pass/fail. This IS the demo stdout capture —
-    // the assertion messages below intentionally do NOT reprint result.stdOut.
     std::cout << "[DEMO CMD] " << result.commandLine << "\n";
     if (!result.stdOut.empty())
     {
@@ -271,8 +220,7 @@ static void RunCorrectnessTest(const std::string& zstFile, const std::vector<std
         << "Failed to launch demo: " << result.launchError << "\n"
         << "Command: " << result.commandLine;
 
-    // Adversarial path: manifest entry matched AND declares a non-zero expected
-    // exit code. Score against it.
+    // Adversarial: expect the declared non-zero exit code.
     if (entry && entry->expectedExitCode > 0)
     {
         if (result.exitCode != entry->expectedExitCode)
@@ -288,9 +236,7 @@ static void RunCorrectnessTest(const std::string& zstFile, const std::vector<std
         return;
     }
 
-    // Legacy path: no manifest match, OR match with expected_exit_code == 0
-    // (i.e. entry existed only to declare a GPU-conditional skip that didn't
-    // apply on this GPU). Expect the demo to succeed.
+    // Legacy: expect success.
     ASSERT_EQ(result.exitCode, 0)
         << "Demo process returned non-zero exit code: " << result.exitCode << "\n"
         << "Command: " << result.commandLine
@@ -427,9 +373,6 @@ TEST_P(ZstdGpuDemoTests, SimulationCheckSeq)
 
 // --- Correctness tests — GBV, small-file only ---
 
-// GBV ("GPU-Based Validation") is expensive; it multiplies per-dispatch cost
-// dramatically on some drivers. Only run on files <= --gbv-max-mb so the
-// wrapper stays inside its timeout on large concat batches.
 TEST_P(ZstdGpuDemoTests, Gbv)
 {
 #if defined(_M_ARM) || defined(_M_ARM64) || defined(_M_ARM64EC)
@@ -441,8 +384,7 @@ TEST_P(ZstdGpuDemoTests, Gbv)
                      << g_testConfig.gbvMaxMB << " MB).";
         return;
     }
-    // Passing --d3d-dbg explicitly matches the ATG spec even though --d3d-gbv
-    // implies it — defensive against a future demo change that decouples them.
+    // --d3d-dbg passed explicitly even though --d3d-gbv implies it.
     RunCorrectnessTest(GetParam(), {"--chk-gpu", "--d3d-dbg", "--d3d-gbv"});
 #endif
 }
