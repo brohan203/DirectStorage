@@ -35,7 +35,9 @@ def hashes(path: Path) -> dict[str, str]:
 def test_generates_deterministic_representative_sources(tmp_path: Path) -> None:
     first = generator.generate(tmp_path, "phase2", ROOT, False)
     first_hashes = hashes(first)
-    assert set(first_hashes) == {"avocado.bin", "chunked.bin", "bc1.dds", "bc3.dds", "bc4.dds", "bc5.dds"}
+    assert set(first_hashes) == {
+        "avocado.bin", "chunked.bin", "bc1.dds", "bc3.dds", "bc4.dds", "bc5.dds", "bc7.dds"
+    }
     with pytest.raises(FileExistsError, match="--overwrite"):
         generator.generate(tmp_path, "phase2", ROOT, False)
     second = generator.generate(tmp_path, "phase2", ROOT, True)
@@ -51,5 +53,7 @@ def test_generated_dds_files_match_supported_formats(tmp_path: Path) -> None:
     sys.modules[spec.name] = gacl
     spec.loader.exec_module(gacl)
     assert {gacl.parse_dds_first_mip(path.read_bytes()).format for path in output.glob("*.dds")} == {
-        "BC1", "BC3", "BC4", "BC5"
+        "BC1", "BC3", "BC4", "BC5", "BC7"
     }
+    for path in output.glob("*.dds"):
+        assert any(path.read_bytes()[128:])

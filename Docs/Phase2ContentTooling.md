@@ -34,7 +34,7 @@ Implemented compatibility tools:
 
 `Tools/archive_set.py` now integrates the compatibility writer with consolidated manifests. It selects validated Zstd, GDeflate, and GACL derivatives; maps GACL to the HLK `texture` type by default; supports explicit content-type overrides; parses the completed archive; and byte-checks each payload against the derivative hash before atomically installing the archive and manifest record.
 
-The deterministic representative set produced 130 archive entries and a 4,594,944-byte archive. A complete overwrite rebuild reproduced all 139 source, derivative, sidecar, archive, and manifest files byte-for-byte.
+The BC7-inclusive deterministic representative set produced 152 archive entries and a 4,606,128-byte archive. A complete overwrite rebuild reproduced all 162 source, derivative, sidecar, archive, and manifest files byte-for-byte.
 
 Remaining archive compatibility checkpoint:
 
@@ -78,8 +78,8 @@ All 50 available BC1/3/4/5 first-mip DDS payloads from the pinned GACL InsectsDe
 Individual files do not all improve, especially for BC3 and BC4. Conditioning remains content-dependent and should be measured before selecting a transform.
 
 
-BC7 is explicitly deferred to Phase 3. The pinned `Lib/shuffle/bc7.h` contract tries several transforms and keeps the best compressed result, so it does not offer the same stable transform-only path as BC1/3/4/5. Phase 3 must mirror the selected-transform and reverse-metadata contract exactly; Phase 2 rejects BC7 rather than emitting speculative output.
+Phase 2 includes BC7 through the pinned library's production-supported transform ID 7 (`GACL_SHUFFLE_TRANSFORM_ZSTD_ONLY`). BC7 output is therefore a constrained-Zstd stream with no experimental texture rearrangement. The pinned split/join transforms (IDs 5 and 6) remain explicitly experimental: the library removes them from `GROUP_ANY_SUPPORTED`, and mode-join metadata export is incomplete. They are deferred as a future compression optimization, not as a blocker for BC7 content support.
 
-Phase 2 production support is implemented by `Tools/GACLContentTool` and `Tools/gacl_compress.py` for BC1, BC3, BC4, and BC5 array item 0 / mip 0. The stage records width, height, DDS format, mip/array metadata, transform identity/version, constrained-Zstd parameters, and compressed/uncompressed sizes in the consolidated manifest. Before installation, every raw `.gacl` Zstd stream is decompressed, reverse-transformed, and byte-compared with the original BC payload.
+Phase 2 production support is implemented by `Tools/GACLContentTool` and `Tools/gacl_compress.py` for BC1, BC3, BC4, BC5, and BC7 array item 0 / mip 0. The stage records width, height, DDS format, mip/array metadata, selected transform identity/version, constrained-Zstd parameters, and compressed/uncompressed sizes in the consolidated manifest. Before installation, every raw `.gacl` stream is decompressed, reverse-transformed where applicable, and byte-compared with the original BC payload.
 
 Current build blocker: the pinned Visual Studio solution references legacy NuGet dependencies (`directxtex_desktop_win10` 2025.7.10.1, GoogleTest 1.8.1.7, and ONNX Runtime 1.24.2) that are not available from the configured public NuGet feed. The core library project also directly includes DirectXTex and ONNX Runtime headers, so the solution cannot be treated as dependency-free without creating a deliberately reduced shuffle-only target.

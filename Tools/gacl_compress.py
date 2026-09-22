@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate verified BC1/BC3/BC4/BC5 GACL derivatives for one Content Factory set."""
+"""Generate verified BC1/BC3/BC4/BC5/BC7 GACL derivatives for one Content Factory set."""
 
 from __future__ import annotations
 
@@ -43,14 +43,17 @@ DXGI_FORMATS = {
     82: ("BC5", "DXGI_FORMAT_BC5_TYPELESS", 16),
     83: ("BC5", "DXGI_FORMAT_BC5_UNORM", 16),
     84: ("BC5", "DXGI_FORMAT_BC5_SNORM", 16),
+    97: ("BC7", "DXGI_FORMAT_BC7_TYPELESS", 16),
+    98: ("BC7", "DXGI_FORMAT_BC7_UNORM", 16),
+    99: ("BC7", "DXGI_FORMAT_BC7_UNORM_SRGB", 16),
 }
-BC7_DXGI = {97, 98, 99}
-TRANSFORM_IDS = {"BC1": 1, "BC3": 2, "BC4": 3, "BC5": 4}
+TRANSFORM_IDS = {"BC1": 1, "BC3": 2, "BC4": 3, "BC5": 4, "BC7": 7}
 TRANSFORM_NAMES = {
     "BC1": "GACL_SHUFFLE_TRANSFORM_ZSTD_BC1_224",
     "BC3": "GACL_SHUFFLE_TRANSFORM_ZSTD_BC3_116224",
     "BC4": "GACL_SHUFFLE_TRANSFORM_ZSTD_BC4_116",
     "BC5": "GACL_SHUFFLE_TRANSFORM_ZSTD_BC5_116116",
+    "BC7": "GACL_SHUFFLE_TRANSFORM_ZSTD_ONLY",
 }
 
 
@@ -97,8 +100,6 @@ def parse_dds_first_mip(data: bytes) -> DDSFirstMip:
         if len(data) < 148:
             raise ValueError("truncated DDS DX10 header")
         dxgi = read_u32(data, 128)
-        if dxgi in BC7_DXGI:
-            raise ValueError("BC7 GACL conditioning is deferred to Phase 3")
         try:
             format_name, exact_name, bytes_per_block = DXGI_FORMATS[dxgi]
         except KeyError as error:
@@ -248,7 +249,7 @@ def build_variants(
             "validation": "pass",
         })
     if not records:
-        raise ValueError("content set contains no supported BC1/BC3/BC4/BC5 DDS sources")
+        raise ValueError("content set contains no supported BC1/BC3/BC4/BC5/BC7 DDS sources")
     return sorted(records, key=lambda item: item["path"])
 
 

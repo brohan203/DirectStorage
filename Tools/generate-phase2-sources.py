@@ -9,6 +9,7 @@ import struct
 from pathlib import Path
 
 DDS_MAGIC = 0x20534444
+FOURCC_DX10 = 0x30315844
 FORMATS = {
     "bc1.dds": (0x31545844, 8),
     "bc3.dds": (0x35545844, 16),
@@ -42,6 +43,23 @@ def make_dds(path: Path, fourcc: int, bytes_per_block: int, seed: int) -> None:
     path.write_bytes(data)
 
 
+def make_bc7_dds(path: Path, seed: int) -> None:
+    width, height, mip_count = 19, 13, 4
+    first_mip_size = ((width + 3) // 4) * ((height + 3) // 4) * 16
+    data = bytearray(148 + first_mip_size)
+    struct.pack_into("<I", data, 0, DDS_MAGIC)
+    struct.pack_into("<I", data, 4, 124)
+    struct.pack_into("<I", data, 12, height)
+    struct.pack_into("<I", data, 16, width)
+    struct.pack_into("<I", data, 28, mip_count)
+    struct.pack_into("<I", data, 76, 32)
+    struct.pack_into("<I", data, 80, 0x4)
+    struct.pack_into("<I", data, 84, FOURCC_DX10)
+    struct.pack_into("<IIIII", data, 128, 98, 3, 0, 1, 0)
+    data[148:] = deterministic_bytes(first_mip_size, seed)
+    path.write_bytes(data)
+
+
 def generate(root: Path, set_name: str, repository_root: Path, overwrite: bool) -> Path:
     destination = root.resolve() / "originals" / set_name
     if destination.exists() and not overwrite:
@@ -57,6 +75,7 @@ def generate(root: Path, set_name: str, repository_root: Path, overwrite: bool) 
     (destination / "chunked.bin").write_bytes(deterministic_bytes(192 * 1024 + 137, 0xC0FFEE))
     for index, (name, (fourcc, bytes_per_block)) in enumerate(FORMATS.items(), start=1):
         make_dds(destination / name, fourcc, bytes_per_block, 0xABC000 + index)
+    make_bc7_dds(destination / "bc7.dds", 0xABC007)
     return destination
 
 

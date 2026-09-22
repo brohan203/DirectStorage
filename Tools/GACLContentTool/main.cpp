@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 #include "gacl.h"
+#include "shuffle.h"
 #include "zstd.h"
 
 #include <array>
@@ -23,7 +24,7 @@ HRESULT Shuffle_BC5(uint8_t*, const uint8_t*, size_t, size_t);
 
 namespace
 {
-    constexpr std::string_view kVersion = "1.0.0";
+    constexpr std::string_view kVersion = "1.1.0";
     constexpr size_t kShuffleVersion = 1;
 
     struct BlockCase
@@ -35,19 +36,19 @@ namespace
         uint32_t transformId;
     };
 
-    const std::array<BlockCase, 4> kCases{{
-        {"BC1", 8, 2, Shuffle_BC1, 1},
-        {"BC3", 16, 4, Shuffle_BC3, 2},
-        {"BC4", 8, 4, Shuffle_BC4, 3},
-        {"BC5", 16, 4, Shuffle_BC5, 4},
+    const std::array<BlockCase, 5> kCases{{
+        {"BC1", 8, 2, Shuffle_BC1, GACL_SHUFFLE_TRANSFORM_ZSTD_BC1_224},
+        {"BC3", 16, 4, Shuffle_BC3, GACL_SHUFFLE_TRANSFORM_ZSTD_BC3_116224},
+        {"BC4", 8, 4, Shuffle_BC4, GACL_SHUFFLE_TRANSFORM_ZSTD_BC4_116},
+        {"BC5", 16, 4, Shuffle_BC5, GACL_SHUFFLE_TRANSFORM_ZSTD_BC5_116116},
+        {"BC7", 16, 1, nullptr, GACL_SHUFFLE_TRANSFORM_ZSTD_ONLY},
     }};
-
-    struct BC1Block { uint16_t color0; uint16_t color1; uint32_t indices; };
-    struct BC3Block { uint8_t alpha0; uint8_t alpha1; uint8_t alphaIndices[6]; BC1Block color; };
-    struct BC4Block { uint8_t endpoint0; uint8_t endpoint1; uint8_t indices[6]; };
-    struct BC5Block { BC4Block red; BC4Block green; };
-    static_assert(sizeof(BC1Block) == 8 && sizeof(BC3Block) == 16);
-    static_assert(sizeof(BC4Block) == 8 && sizeof(BC5Block) == 16);
+    struct LocalBC1Block { uint16_t color0; uint16_t color1; uint32_t indices; };
+    struct LocalBC3Block { uint8_t alpha0; uint8_t alpha1; uint8_t alphaIndices[6]; LocalBC1Block color; };
+    struct LocalBC4Block { uint8_t endpoint0; uint8_t endpoint1; uint8_t indices[6]; };
+    struct LocalBC5Block { LocalBC4Block red; LocalBC4Block green; };
+    static_assert(sizeof(LocalBC1Block) == 8 && sizeof(LocalBC3Block) == 16);
+    static_assert(sizeof(LocalBC4Block) == 8 && sizeof(LocalBC5Block) == 16);
 
     template <typename T> T Read(const uint8_t*& source)
     {
@@ -81,7 +82,7 @@ namespace
     const BlockCase& FindCase(std::string_view name)
     {
         for (const auto& value : kCases) if (name == value.name) return value;
-        throw std::runtime_error("format must be BC1, BC3, BC4, or BC5; BC7 is deferred to Phase 3");
+        throw std::runtime_error("format must be BC1, BC3, BC4, BC5, or BC7");
     }
 
     int ParseInteger(std::string_view text, const char* label, int minimum, int maximum)
@@ -98,7 +99,7 @@ namespace
         const uint8_t* color0 = source;
         const uint8_t* color1 = color0 + count * 2;
         const uint8_t* indices = color1 + count * 2;
-        auto* blocks = reinterpret_cast<BC1Block*>(destination);
+        auto* blocks = reinterpret_cast<LocalBC1Block*>(destination);
         for (size_t index = 0; index < count; ++index)
         {
             blocks[index].color0 = Read<uint16_t>(color0);
@@ -115,7 +116,7 @@ namespace
         const uint8_t* color0 = alphaIndices + count * 6;
         const uint8_t* color1 = color0 + count * 2;
         const uint8_t* colorIndices = color1 + count * 2;
-        auto* blocks = reinterpret_cast<BC3Block*>(destination);
+        auto* blocks = reinterpret_cast<LocalBC3Block*>(destination);
         for (size_t index = 0; index < count; ++index)
         {
             blocks[index].alpha0 = Read<uint8_t>(alpha0);
@@ -132,7 +133,7 @@ namespace
         const uint8_t* endpoint0 = source;
         const uint8_t* endpoint1 = endpoint0 + count;
         const uint8_t* indices = endpoint1 + count;
-        auto* blocks = reinterpret_cast<BC4Block*>(destination);
+        auto* blocks = reinterpret_cast<LocalBC4Block*>(destination);
         for (size_t index = 0; index < count; ++index)
         {
             blocks[index].endpoint0 = Read<uint8_t>(endpoint0);
@@ -149,7 +150,7 @@ namespace
         const uint8_t* green0 = redIndices + count * 6;
         const uint8_t* green1 = green0 + count;
         const uint8_t* greenIndices = green1 + count;
-        auto* blocks = reinterpret_cast<BC5Block*>(destination);
+        auto* blocks = reinterpret_cast<LocalBC5Block*>(destination);
         for (size_t index = 0; index < count; ++index)
         {
             blocks[index].red.endpoint0 = Read<uint8_t>(red0);
@@ -163,6 +164,11 @@ namespace
 
     void Unshuffle(const BlockCase& value, uint8_t* destination, const uint8_t* source, size_t blockCount)
     {
+        if (value.transformId == 7)
+        {
+            std::memcpy(destination, source, blockCount * value.bytesPerBlock);
+            return;
+        }
         const size_t shuffledCount = blockCount - blockCount % value.groupSize;
         if (value.transformId == 1) UnshuffleBC1(destination, source, shuffledCount);
         else if (value.transformId == 2) UnshuffleBC3(destination, source, shuffledCount);
@@ -178,8 +184,15 @@ namespace
         if (input.empty() || input.size() % value.bytesPerBlock != 0)
             throw std::runtime_error("input must contain a non-empty, block-aligned BC payload");
         std::vector<uint8_t> shuffled(input.size());
-        if (FAILED(value.shuffle(shuffled.data(), input.data(), input.size(), kShuffleVersion)))
-            throw std::runtime_error("GACL stable shuffle failed");
+        if (value.shuffle != nullptr)
+        {
+            if (FAILED(value.shuffle(shuffled.data(), input.data(), input.size(), kShuffleVersion)))
+                throw std::runtime_error("GACL stable shuffle failed");
+        }
+        else
+        {
+            shuffled = input;
+        }
 
         ZSTD_CCtx* context = ZSTD_createCCtx();
         if (!context) throw std::runtime_error("could not create Zstd context");

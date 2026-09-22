@@ -214,6 +214,7 @@ def validate_manifest(document: object) -> dict[str, Any]:
                 "BC3": (2, "GACL_SHUFFLE_TRANSFORM_ZSTD_BC3_116224"),
                 "BC4": (3, "GACL_SHUFFLE_TRANSFORM_ZSTD_BC4_116"),
                 "BC5": (4, "GACL_SHUFFLE_TRANSFORM_ZSTD_BC5_116116"),
+                "BC7": (7, "GACL_SHUFFLE_TRANSFORM_ZSTD_ONLY"),
             }
             texture_format = parameters["texture_format"]
             if texture_format not in transform_contract or (

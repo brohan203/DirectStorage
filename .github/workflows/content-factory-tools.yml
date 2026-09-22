@@ -58,6 +58,9 @@ jobs:
         architecture: [x64, ARM64]
     steps:
     - uses: actions/checkout@v7
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
     - name: Clone pinned GACL dependency
       shell: pwsh
       run: |
@@ -72,3 +75,8 @@ jobs:
         -DGACL_ROOT=${{ runner.temp }}\gacl
     - name: Build GACL content tool
       run: cmake --build ${{ runner.temp }}\gacl-content --config Release --target GACLContentTool --parallel
+    - name: Test GACL content tool
+      if: matrix.architecture == 'x64'
+      env:
+        GACL_CONTENT_TOOL: ${{ runner.temp }}\gacl-content\Release\GACLContentTool.exe
+      run: python -m unittest Tests.test_gacl_content_tool -v

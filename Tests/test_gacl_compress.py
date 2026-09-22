@@ -30,7 +30,7 @@ process_set = load("process_set_for_gacl", "process-set.py")
 def make_dds(path: Path, *, fourcc: int = 0x31545844, dxgi: int | None = None) -> bytes:
     offset = 148 if dxgi is not None else 128
     bytes_per_block = 8
-    if dxgi in (76, 77, 78, 82, 83, 84):
+    if dxgi in (76, 77, 78, 82, 83, 84, 97, 98, 99):
         bytes_per_block = 16
     data = bytearray(offset + bytes_per_block * 4)
     struct.pack_into("<I", data, 0, gacl.DDS_MAGIC)
@@ -71,7 +71,8 @@ elif a.verify:
     print('GACL verification passed')
 else:
     Path(a.output).write_bytes(b'GACL' + Path(a.input).read_bytes())
-    print('transform_id=1')
+    transform_ids={'BC1':1,'BC3':2,'BC4':3,'BC5':4,'BC7':7}
+    print(f'transform_id={transform_ids[a.format]}')
 """,
         encoding="utf-8",
     )
@@ -119,10 +120,10 @@ def test_dx10_array_records_array_size_but_extracts_item_zero(tmp_path: Path) ->
     assert info.data_size == 64
 
 
-def test_bc7_is_explicitly_deferred(tmp_path: Path) -> None:
+def test_bc7_dx10_uses_production_supported_zstd_transform(tmp_path: Path) -> None:
     data = make_dds(tmp_path / "bc7.dds", dxgi=98)
-    with pytest.raises(ValueError, match="deferred to Phase 3"):
-        gacl.parse_dds_first_mip(data)
+    info = gacl.parse_dds_first_mip(data)
+    assert (info.format, info.format_name, info.data_size) == ("BC7", "DXGI_FORMAT_BC7_UNORM", 64)
 
 
 def test_process_adds_verified_manifest_record(tmp_path: Path) -> None:
@@ -165,19 +166,21 @@ def test_existing_outputs_require_overwrite(tmp_path: Path) -> None:
     assert record["parameters"]["target_block_size"] == 32768
 
 
-def test_unsupported_dds_leaves_manifest_and_tree_unchanged(tmp_path: Path) -> None:
+def test_bc7_process_adds_zstd_only_transform_record(tmp_path: Path) -> None:
     source = tmp_path / "originals" / "textures" / "image.dds"
     make_dds(source, dxgi=98)
     manifest = process_set.create_manifest(tmp_path, "textures")
     process_set.write_json_atomic(process_set.manifest_path(tmp_path, "textures"), manifest)
-    manifest_path = process_set.manifest_path(tmp_path, "textures")
-    before = manifest_path.read_bytes()
     tool = tmp_path / "fake_gacl.cmd"
     make_fake_tool(tool)
-    with pytest.raises(ValueError, match="deferred to Phase 3"):
-        gacl.process(tmp_path, "textures", tool, 12, 65536, False)
-    assert manifest_path.read_bytes() == before
-    assert not (tmp_path / "gacl" / "textures").exists()
+    manifest_path = gacl.process(tmp_path, "textures", tool, 12, 65536, False)
+    document = process_set.load_manifest(manifest_path)
+    record = document["derivatives"][0]
+    assert record["parameters"]["texture_format"] == "BC7"
+    assert record["parameters"]["transform_id"] == 7
+    assert record["parameters"]["transform_name"] == "GACL_SHUFFLE_TRANSFORM_ZSTD_ONLY"
+    assert record["metadata"]["dds_format"] == "DXGI_FORMAT_BC7_UNORM"
+    process_set.verify_files(tmp_path, "textures", document)
 
 
 def test_non_dds_set_is_rejected(tmp_path: Path) -> None:

@@ -50,7 +50,7 @@ python Tools\gdeflate_compress.py <set-name> `
 
 By default, the processor creates levels 1 through 12 for every source. Use `--levels` to select a smaller production matrix. Each output is verified by the C++ tool, its 32-byte header is independently checked, and its header sizes and compression level are recorded in the consolidated manifest. Output-tree and manifest replacement is transactional; `--overwrite` is required to replace an existing GDeflate matrix.
 
-Generate BC1/BC3/BC4/BC5 GACL derivatives with the reduced production tool:
+Generate BC1/BC3/BC4/BC5/BC7 GACL derivatives with the reduced production tool:
 
 ```powershell
 python Tools\gacl_compress.py <set-name> `
@@ -58,7 +58,7 @@ python Tools\gacl_compress.py <set-name> `
   --gacl-exe C:\build\GACLContentTool.exe
 ```
 
-Phase 2 conditions array item 0 / mip 0 and records the DDS format, dimensions, transform identity/version, and constrained-Zstd settings in the manifest. Every raw `.gacl` Zstd stream is decompressed, reverse-transformed, and byte-compared before installation. BC7 is rejected explicitly and deferred to Phase 3.
+Phase 2 conditions array item 0 / mip 0 and records the DDS format, dimensions, transform identity/version, and constrained-Zstd settings in the manifest. Every raw `.gacl` stream is decompressed, reverse-transformed where applicable, and byte-compared before installation. BC7 uses production-supported transform ID 7 (`GACL_SHUFFLE_TRANSFORM_ZSTD_ONLY`); the pinned experimental BC7 split/join transforms remain deferred as a future compression optimization.
 
 Create a verified deterministic archive from manifest derivatives:
 
@@ -81,7 +81,7 @@ python Tools\run-content-factory.py <set-name> `
   --gacl-exe C:\build\GACLContentTool.exe
 ```
 
-Generate the deterministic representative source set with `Tools\generate-phase2-sources.py`. It combines the repository's `Avocado.bin`, a chunking workload, and BC1/BC3/BC4/BC5 DDS fixtures.
+Generate the deterministic representative source set with `Tools\generate-phase2-sources.py`. It combines the repository's `Avocado.bin`, a chunking workload, and BC1/BC3/BC4/BC5/BC7 DDS fixtures.
 
 Use `--overwrite` for intentional deterministic rebuilds. The manifest contains no timestamps and uses stable sorting and serialization, so unchanged sources produce byte-identical output.
 
@@ -116,7 +116,7 @@ GACL derivative metadata is expected to carry DXGI format, dimensions, array ite
 ## Related tools
 
 - `GDeflate/GDeflateContentTool` generates and verifies standalone GDeflate content.
-- `Tools/GACLContentTool` generates and verifies production BC1/3/4/5 GACL payloads.
+- `Tools/GACLContentTool` generates and verifies production BC1/3/4/5/BC7 GACL payloads.
 - `Tools/GACLShuffleSpike` retains the exploratory compression comparison harness.
 - `Tools/create_hlk_archive.py` creates deterministic HLK-compatible archives.
 - `Tools/validate_hlk_archive.py` validates and extracts archive payloads.
