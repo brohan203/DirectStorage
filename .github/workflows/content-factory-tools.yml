@@ -171,7 +171,6 @@ jobs:
         $beforeJson = Get-Content -Raw "${{ runner.temp }}\hashes-before.json"
         $afterJson = $after | ConvertTo-Json -Depth 3
         if ($beforeJson.Trim() -ne $afterJson.Trim()) {
-        if ($beforeJson.Trim() -ne $afterJson.Trim()) {
           throw 'Content Factory output changed after deterministic overwrite rebuild.'
         }
     - name: Stage diagnostic artifacts
