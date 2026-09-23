@@ -30,8 +30,10 @@ def main() -> int:
         return 0
     stream_size = next((arg.split("=", 1)[1] for arg in sys.argv if arg.startswith("--stream-size=")), None)
     block_size = next((arg.split("=", 1)[1] for arg in sys.argv if arg.startswith("--target-compressed-block-size=")), None)
-    if (stream_size is None or block_size is None or int(stream_size) != len(data)
-            or int(block_size) <= 0):
+    window_log = next((arg.split("=", 1)[1].split("=", 1)[1] for arg in sys.argv
+                       if arg.startswith("--zstd=wlog=")), None)
+    if (stream_size is None or int(stream_size) != len(data)
+            or (block_size is None and window_log != "18") or (block_size is not None and int(block_size) <= 0)):
         print("missing or invalid framing options", file=sys.stderr)
         return 1
     sys.stdout.buffer.write(MAGIC + struct.pack("<I", len(data)) + data)

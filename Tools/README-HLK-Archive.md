@@ -1,10 +1,31 @@
 # HLK-compatible archive tools
 
-These Python tools create and inspect the compact archive format used by the internal DirectStorage HLK content generator.
+The internal DirectStorage HLK tests consume three lockstep archives generated from the same ordered source list:
 
-## Create
+- `dstoragetest.uncompressed`
+- `dstoragetest.gdeflate`
+- `dstoragetest.zstd`
 
-Prepare a JSON manifest. Entry order is significant because the HLK archive stores no logical names:
+Use the set-level generator:
+
+```powershell
+python Tools\hlk_content_set.py <set-name> `
+  --root C:\content-factory `
+  --zstd-exe C:\tools\zstd.exe `
+  --gdeflate-exe C:\build\GDeflateContentTool.exe
+```
+
+The generator matches the internal `makehlkcontent` contract:
+
+- identical entry count, order, and content type across all three files;
+- source extensions map `.dds` to texture, `.ply` to geometry/model, `.txt` to text, and other files to unknown;
+- GDeflate entries use BestRatio (level 12) and contain the raw DirectStorage stream without the standalone tool's 32-byte wrapper;
+- Zstd entries are standalone level-3 frames with a 256 KiB window, matching the Zstd metacommand's single-frame mode;
+- the resulting archives and their lockstep relationship are recorded in the consolidated manifest.
+
+## Low-level writer and reader
+
+`create_hlk_archive.py` writes one archive from an explicit JSON entry list. Entry order is significant because the format stores no logical names:
 
 ```json
 {
@@ -16,30 +37,23 @@ Prepare a JSON manifest. Entry order is significant because the HLK archive stor
 }
 ```
 
-Then run:
-
 ```powershell
 python Tools\create_hlk_archive.py manifest.json content.bin `
   --source-root path\to\payloads `
-  --alignment 4096
-```
-
-Content types can be written as `unknown`, `texture`, `geometry`, or `text`; numeric values `0` through `3` are also accepted. The writer rejects unsafe paths, duplicate source paths, invalid types, invalid alignment, and archives that exceed the format's 32-bit offset/size limit.
-
-```powershell
+  --alignment 1
 python Tools\validate_hlk_archive.py content.bin `
   --extract extracted `
   --report report.json
 ```
 
-Validation checks version, entry type, table bounds, ordered non-overlapping payload ranges, and archive bounds. Extraction records a SHA-256 for each payload.
+Content types may be `unknown`, `texture`, `geometry`, or `text`; numeric values 0 through 3 are also accepted. Validation checks version, entry type, table bounds, ordered non-overlapping payloads, and archive bounds.
 
-For a Content Factory set, use `Tools\archive_set.py`. It selects validated derivatives from the consolidated manifest, applies default or overridden content types, creates the archive, parses it back, and byte-checks every payload against the derivative hash before atomically updating the archive and manifest.
+## Generic derivative packaging
 
-```powershell
-python Tools\archive_set.py <set-name> --root C:\content-factory
-```
+`archive_set.py` can package selected derivatives for diagnostics or transport. Its mixed derivative archive is not the HLK `dstoragetest` triplet.
 
-## Compatibility scope
+## Compatibility evidence
 
-The HLK format consists of an 8-byte header followed by 12-byte entries and raw payloads. It stores no file names, compression format, uncompressed size, or transform metadata. Those values remain external—in the manifest and test scenario—so this tooling intentionally does not treat the format as a general-purpose package format.
+The generated triplet was opened by the actual internal `ReadContents` implementation from `hlk/makehlkcontent/makehlkcontent.h`. Entry counts/types matched across all three files, and real Zstd/GDeflate payloads were independently decoded and compared with the uncompressed entries.
+
+The format consists of an 8-byte header followed by 12-byte entries and raw payloads. It stores no file names, codec, uncompressed size, or transform metadata; those values remain external in the Content Factory manifest and test scenario.

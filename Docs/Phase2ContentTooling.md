@@ -18,29 +18,27 @@ The standalone format is an intermediate Content Factory representation. DirectS
 
 ## DirectStorage archive tooling
 
-The recovered specification requires DirectStorage archive creation through the HLK `makehlkcontent` path. Investigation of the internal DirectStorage source found:
+The internal DirectStorage source defines the Phase 2 HLK product contract:
 
-- `hlk/makehlkcontent/main.cpp` implements the writer.
-- `hlk/makehlkcontent/makehlkcontent.h` defines the on-disk header and entry records.
-- `hlk/content/dstoragetest.manifest` defines the existing content matrix.
+- `hlk/makehlkcontent/main.cpp` writes three parallel files from one ordered source manifest: `dstoragetest.uncompressed`, `dstoragetest.gdeflate`, and `dstoragetest.zstd`.
+- `hlk/makehlkcontent/makehlkcontent.h` defines the 8-byte header, 12-byte entry records, and the `ReadContents` reader used by HLK tests.
+- `hlk/dstoragetest/main.cpp` loads the three files by matching index and content type. Zstd metacommand tests create the command with `ZSTD_META_COMMAND_FLAG_SINGLE_FRAME_MODE`, so every `.zstd` archive entry must be one standalone frame.
+- `dstoragecore/lib/DStorageZstdCompressionCodec.cpp` uses level 3 and a 256 KiB window. `Tools/hlk_content_set.py` mirrors those settings with `--zstd=wlog=18`.
 
-The current format is a compact test format rather than a general-purpose archive schema. Its header and entry records use fixed `uint32_t` fields, but it is order-sensitive and omits logical names, hashes, uncompressed sizes, codec identifiers, and transform metadata. The ABI-dependent `size_t` concern applies to the standalone GDeflate demo header, not the HLK records. The writer also contains a suspicious initial entry-table write before its final table rewrite.
+Implemented tools:
 
-Implemented compatibility tools:
+- `Tools/create_hlk_archive.py` creates deterministic archives from explicit entry manifests.
+- `Tools/validate_hlk_archive.py` independently parses, validates, reports, and extracts archive entries.
+- `Tools/hlk_content_set.py` builds the required lockstep uncompressed/GDeflate/Zstd triplet from the same sorted source list. It uses GDeflate BestRatio (level 12), strips the standalone tool header before packaging, and validates one-frame Zstd and raw GDeflate payloads against each source.
+- `Tools/archive_set.py` remains an optional generic derivative packager. Its mixed derivative archives are not the HLK test-content triplet.
 
-- `Tools/create_hlk_archive.py` creates deterministic archives from explicit JSON manifests.
-- `Tools/validate_hlk_archive.py` independently validates and optionally extracts archive entries.
-- Tests cover valid extraction, deterministic rebuilds, traversal, duplicates, invalid types/version/alignment, truncation, overlap, and out-of-bounds payloads.
+Compatibility is now verified directly against the internal reader: a C++ checker compiled with `hlk/makehlkcontent/makehlkcontent.h` called the actual `ReadContents` implementation and accepted all three generated files with matching lockstep entry types/counts. Real Zstd entries were decoded independently and real raw GDeflate entries were rewrapped and verified by `GDeflateContentTool`.
 
-`Tools/archive_set.py` now integrates the compatibility writer with consolidated manifests. It selects validated Zstd, GDeflate, and GACL derivatives; maps GACL to the HLK `texture` type by default; supports explicit content-type overrides; parses the completed archive; and byte-checks each payload against the derivative hash before atomically installing the archive and manifest record.
+The BC7-inclusive representative set produced seven lockstep HLK entries. Archive sizes were 222,357 bytes uncompressed, 219,016 bytes GDeflate, and 219,071 bytes Zstd. The complete workflow contained 164 source, derivative, sidecar, archive, and manifest files; an overwrite rebuild reproduced all 164 byte-for-byte.
 
-The BC7-inclusive deterministic representative set produced 152 archive entries and a 4,606,128-byte archive. A complete overwrite rebuild reproduced all 162 source, derivative, sidecar, archive, and manifest files byte-for-byte.
+`makehlkcontent` intentionally reserves entry-table space before appending payloads, then rewrites the populated table at offset 8 after compression sizes and offsets are known. However, its placeholder write starts at `&codecEntries[c]` instead of `&codecEntries[0]`; for codec index 1 this reads past the vector while writing the full table. The Content Factory writer does not reproduce that undefined behavior—it writes a valid complete table directly.
 
-Remaining archive compatibility checkpoint:
-
-1. Run the internal HLK reader against an archive created by the compatibility writer. The internal reader source/binary is not present in the accessible DirectStorage, Samples, or pinned GACL checkouts.
-2. Reproduce and fix or safely wrap the suspicious initial table write in `makehlkcontent` when that internal source is available.
-3. Decide separately whether a versioned production archive format is warranted.
+The archive format remains a compact test format rather than a general-purpose self-describing package. Logical names, codec identifiers, uncompressed sizes, hashes, GACL transform metadata, and the archive-group relationship remain in the Content Factory manifest.
 
 ## GACL conditioning
 

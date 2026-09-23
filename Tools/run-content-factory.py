@@ -29,7 +29,7 @@ def run(args: argparse.Namespace) -> Path:
     set_name = driver.validate_set_name(args.set_name)
     stages = args.stages
     if stages == ["all"]:
-        stages = ["zstd", "gdeflate", "gacl", "archive"]
+        stages = ["zstd", "gdeflate", "gacl", "hlk"]
     if "all" in stages:
         raise ValueError("all cannot be combined with other stages")
     if len(stages) != len(set(stages)):
@@ -98,6 +98,14 @@ def run(args: argparse.Namespace) -> Path:
                 root, set_name, args.gacl_exe,
                 args.gacl_zstd_level, args.gacl_target_block_size, args.overwrite,
             )
+    if "hlk" in stages:
+        if args.zstd_exe is None or args.gdeflate_exe is None:
+            raise ValueError("--zstd-exe and --gdeflate-exe are required for the hlk stage")
+        module = load_module("hlk_for_orchestration", "hlk_content_set.py")
+        manifest_path = module.process(
+            root, set_name, args.hlk_archive_prefix,
+            args.zstd_exe, args.gdeflate_exe, args.hlk_alignment, args.overwrite,
+        )
     if "archive" in stages:
         module = load_module("archive_for_orchestration", "archive_set.py")
         manifest_path = module.process(
@@ -115,7 +123,11 @@ def main() -> int:
     parser.add_argument("set_name")
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--sources", nargs="+", type=Path, metavar="FILE")
-    parser.add_argument("--stages", nargs="+", choices=["all", "zstd", "gdeflate", "gacl", "archive"], default=["all"])
+    parser.add_argument(
+        "--stages", nargs="+",
+        choices=["all", "zstd", "gdeflate", "gacl", "hlk", "archive"],
+        default=["all"],
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--zstd-exe", type=Path)
     parser.add_argument("--block-sizes-kb", nargs="+", type=int, default=[4, 8, 16])
@@ -126,6 +138,8 @@ def main() -> int:
     parser.add_argument("--gacl-exe", type=Path)
     parser.add_argument("--gacl-zstd-level", type=int, default=12)
     parser.add_argument("--gacl-target-block-size", type=int, default=64 * 1024)
+    parser.add_argument("--hlk-archive-prefix", default="dstoragetest")
+    parser.add_argument("--hlk-alignment", type=int, default=1)
     parser.add_argument("--archive-name", default="content.bin")
     parser.add_argument("--archive-formats", nargs="+", default=["zstd", "gdeflate", "gacl"])
     parser.add_argument("--archive-alignment", type=int, default=16)

@@ -252,10 +252,18 @@ def validate_manifest(document: object) -> dict[str, Any]:
     if not isinstance(archives, list):
         raise ValueError("archives must be an array")
     archive_paths: list[str] = []
-    archive_keys = {"path", "size", "sha256", "format", "entries", "validation"}
+    hlk_groups: dict[str, dict[str, list[tuple[str, str]]]] = {}
+    generic_archive_keys = {"path", "size", "sha256", "format", "entries", "validation"}
+    hlk_archive_keys = generic_archive_keys | {"archive_group", "payload_codec"}
     for index, record in enumerate(archives):
         item = validate_file_record(record, f"archives[{index}]")
-        validate_record_keys(item, archive_keys, f"archives[{index}]")
+        if set(item) not in {frozenset(generic_archive_keys), frozenset(hlk_archive_keys)}:
+            raise ValueError(f"archives[{index}] has an invalid field set")
+        is_hlk_set = set(item) == hlk_archive_keys
+        if is_hlk_set and (
+                not isinstance(item["archive_group"], str) or not item["archive_group"] or
+                item["payload_codec"] not in {"uncompressed", "gdeflate", "zstd"}):
+            raise ValueError(f"archives[{index}] has invalid HLK archive metadata")
         if item["format"] != "dstorage" or item["validation"] != "pass":
             raise ValueError(f"archives[{index}] has an invalid format or validation state")
         validate_output_path(item["path"], "dstorage", set_name, f"archives[{index}].path")
@@ -264,16 +272,35 @@ def validate_manifest(document: object) -> dict[str, Any]:
         if not isinstance(entries, list) or not entries:
             raise ValueError(f"archives[{index}].entries must be non-empty")
         for entry_index, entry in enumerate(entries):
-            if not isinstance(entry, dict) or set(entry) != {"index", "derivative", "content_type"}:
+            expected_entry_keys = {"index", "source", "content_type"} if is_hlk_set else {
+                "index", "derivative", "content_type"
+            }
+            if not isinstance(entry, dict) or set(entry) != expected_entry_keys:
                 raise ValueError(f"archives[{index}].entries[{entry_index}] is invalid")
             if entry["index"] != entry_index:
                 raise ValueError(f"archives[{index}] entry indices must be contiguous and ordered")
-            if entry["derivative"] not in derivative_paths:
+            if is_hlk_set:
+                if entry["source"] not in source_paths:
+                    raise ValueError(f"archives[{index}] references an unknown source")
+            elif entry["derivative"] not in derivative_paths:
                 raise ValueError(f"archives[{index}] references an unknown derivative")
             if entry["content_type"] not in {"unknown", "texture", "geometry", "text"}:
                 raise ValueError(f"archives[{index}] has an invalid content type")
+        if is_hlk_set:
+            group = hlk_groups.setdefault(item["archive_group"], {})
+            if item["payload_codec"] in group:
+                raise ValueError(f"HLK archive group {item['archive_group']!r} has a duplicate codec")
+            group[item["payload_codec"]] = [
+                (entry["source"], entry["content_type"]) for entry in entries
+            ]
     if archive_paths != sorted(archive_paths) or len(archive_paths) != len(set(archive_paths)):
         raise ValueError("archives must be uniquely sorted by path")
+    for group_name, codecs in hlk_groups.items():
+        if set(codecs) != {"uncompressed", "gdeflate", "zstd"}:
+            raise ValueError(f"HLK archive group {group_name!r} must contain all three payload codecs")
+        memberships = list(codecs.values())
+        if any(membership != memberships[0] for membership in memberships[1:]):
+            raise ValueError(f"HLK archive group {group_name!r} entries are not lockstep")
 
     tools = document["tools"]
     if not isinstance(tools, dict):

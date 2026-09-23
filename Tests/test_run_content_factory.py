@@ -37,6 +37,16 @@ def fake_zstd(root: Path) -> Path:
     return wrapper
 
 
+def fake_gdeflate(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    wrapper = root / "fake-gdeflate.cmd"
+    wrapper.write_text(
+        f'@echo off\r\n"{sys.executable}" "{Path(__file__).with_name("fake_gdeflate.py")}" %*\r\n',
+        encoding="utf-8",
+    )
+    return wrapper
+
+
 def arguments(root: Path, **overrides) -> Namespace:
     values = {
         "set_name": "sample",
@@ -53,6 +63,8 @@ def arguments(root: Path, **overrides) -> Namespace:
         "gacl_exe": None,
         "gacl_zstd_level": 12,
         "gacl_target_block_size": 65536,
+        "hlk_archive_prefix": "dstoragetest",
+        "hlk_alignment": 1,
         "archive_name": "content.bin",
         "archive_formats": ["zstd"],
         "archive_alignment": 16,
@@ -93,6 +105,18 @@ def test_all_requires_gdeflate_tool_after_zstd(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="--gdeflate-exe"):
         orchestrator.run(arguments(tmp_path, stages=["all"]))
 
+
+def test_hlk_stage_creates_lockstep_archives(tmp_path: Path) -> None:
+    initialize(tmp_path)
+    manifest_path = orchestrator.run(arguments(
+        tmp_path,
+        stages=["hlk"],
+        gdeflate_exe=fake_gdeflate(tmp_path),
+    ))
+    document = process_set.load_manifest(manifest_path)
+    assert {record["payload_codec"] for record in document["archives"]} == {
+        "uncompressed", "gdeflate", "zstd"
+    }
 
 def test_duplicate_and_mixed_all_stages_are_rejected(tmp_path: Path) -> None:
     initialize(tmp_path)

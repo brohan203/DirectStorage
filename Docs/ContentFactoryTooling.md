@@ -60,15 +60,16 @@ python Tools\gacl_compress.py <set-name> `
 
 Phase 2 conditions array item 0 / mip 0 and records the DDS format, dimensions, transform identity/version, and constrained-Zstd settings in the manifest. Every raw `.gacl` stream is decompressed, reverse-transformed where applicable, and byte-compared before installation. BC7 uses production-supported transform ID 7 (`GACL_SHUFFLE_TRANSFORM_ZSTD_ONLY`); the pinned experimental BC7 split/join transforms remain deferred as a future compression optimization.
 
-Create a verified deterministic archive from manifest derivatives:
+Create the spec-compatible HLK content triplet from the ordered source set:
 
 ```powershell
-python Tools\archive_set.py <set-name> `
+python Tools\hlk_content_set.py <set-name> `
   --root C:\content-factory `
-  --formats zstd gdeflate gacl
+  --zstd-exe C:\tools\zstd.exe `
+  --gdeflate-exe C:\build\GDeflateContentTool.exe
 ```
 
-GACL entries default to `texture`; other derivatives default to `unknown`. Use `--content-types <json>` to override individual derivative paths with `unknown`, `texture`, `geometry`, or `text`. Archive payloads are parsed back and byte-checked against derivative hashes before installation.
+This produces lockstep `dstoragetest.uncompressed`, `dstoragetest.gdeflate`, and `dstoragetest.zstd` files. Every Zstd entry is a standalone level-3 frame with a 256 KiB window for the Zstd metacommand's single-frame mode. Content types derive from source extensions. `archive_set.py` remains available for optional generic derivative packaging; mixed derivative archives are not HLK test content.
 
 Run the complete workflow in dependency order:
 
@@ -108,7 +109,7 @@ Verification fails if sources were added, removed, renamed, or modified after ma
 
 - `sources` — original relative path, byte size, and SHA-256
 - `derivatives` — source relationship, output format, codec parameters, optional format metadata, and validation state
-- `archives` — archive identity plus ordered derivative membership and content type
+- `archives` — generic derivative archives or source-backed HLK triplets, including archive group, payload codec, ordered membership, and content type
 - `tools` — tool versions and optional pinned revisions
 
 GACL derivative metadata is expected to carry DXGI format, dimensions, array item, mip, transform ID/version/options, and Zstd settings. HLK-compatible archives do not store that metadata internally, so the manifest remains authoritative.
@@ -118,7 +119,8 @@ GACL derivative metadata is expected to carry DXGI format, dimensions, array ite
 - `GDeflate/GDeflateContentTool` generates and verifies standalone GDeflate content.
 - `Tools/GACLContentTool` generates and verifies production BC1/3/4/5/BC7 GACL payloads.
 - `Tools/GACLShuffleSpike` retains the exploratory compression comparison harness.
-- `Tools/create_hlk_archive.py` creates deterministic HLK-compatible archives.
+- `Tools/hlk_content_set.py` creates the spec-compatible lockstep HLK archive triplet.
+- `Tools/create_hlk_archive.py` is the deterministic low-level archive writer.
 - `Tools/validate_hlk_archive.py` validates and extracts archive payloads.
 
 ## Just ask any agent
