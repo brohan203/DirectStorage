@@ -9,7 +9,7 @@ The internal DirectStorage HLK tests consume three lockstep archives generated f
 Use the set-level generator:
 
 ```powershell
-python Tools\hlk_content_set.py <set-name> `
+python ContentFactory\tools\hlk_content_set.py <set-name> `
   --root C:\content-factory `
   --zstd-exe C:\tools\zstd.exe `
   --gdeflate-exe C:\build\GDeflateContentTool.exe
@@ -38,10 +38,10 @@ The generator matches the internal `makehlkcontent` contract:
 ```
 
 ```powershell
-python Tools\create_hlk_archive.py manifest.json content.bin `
+python ContentFactory\tools\create_hlk_archive.py manifest.json content.bin `
   --source-root path\to\payloads `
   --alignment 1
-python Tools\validate_hlk_archive.py content.bin `
+python ContentFactory\tools\validate_hlk_archive.py content.bin `
   --extract extracted `
   --report report.json
 ```

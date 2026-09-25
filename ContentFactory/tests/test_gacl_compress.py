@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOLS = ROOT / "Tools"
+FACTORY_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = FACTORY_ROOT.parent
+TOOLS = FACTORY_ROOT / "tools"
 
 
 def load(name: str, filename: str):

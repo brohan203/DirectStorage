@@ -8,9 +8,10 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
-DRIVER = ROOT / "Tools" / "process-set.py"
-PROCESSOR = ROOT / "Tools" / "zstd_compress.py"
+FACTORY_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = FACTORY_ROOT.parent
+DRIVER = FACTORY_ROOT / "tools" / "process-set.py"
+PROCESSOR = FACTORY_ROOT / "tools" / "zstd_compress.py"
 
 
 def load_module(path: Path, name: str):
@@ -49,17 +50,17 @@ class ZstdCompressTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
 
-    def test_generates_full_matrix_and_records_verified_metadata(self):
+    def test_default_produces_one_configuration_and_records_verified_metadata(self):
         result = self.run_processor()
         self.assertEqual(result.returncode, 0, result.stderr)
         manifest = json.loads((self.root / "manifests" / "sample_set.json").read_text(encoding="utf-8"))
         records = manifest["derivatives"]
-        self.assertEqual(len(records), 18)
+        self.assertEqual(len(records), 2)
         self.assertEqual([record["path"] for record in records], sorted(record["path"] for record in records))
         self.assertEqual(manifest["tools"]["zstd"]["version"], "1.0")
         self.assertEqual(
             {(r["parameters"]["block_size_kb"], r["parameters"]["chunk_size_kb"]) for r in records},
-            {(block, chunk) for block in (4, 8, 16) for chunk in (64, 128, 256)},
+            {(16, 256)},
         )
         for record in records:
             output = self.root / Path(record["path"])
@@ -72,6 +73,22 @@ class ZstdCompressTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(verify.returncode, 0, verify.stderr)
+
+    def test_full_matrix_requires_explicit_shader_flag(self):
+        result = self.run_processor("--zstd-shader-matrix")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads((self.root / "manifests" / "sample_set.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(manifest["derivatives"]), 18)
+        self.assertEqual(
+            {(r["parameters"]["block_size_kb"], r["parameters"]["chunk_size_kb"])
+             for r in manifest["derivatives"]},
+            {(block, chunk) for block in (4, 8, 16) for chunk in (64, 128, 256)},
+        )
+
+    def test_shader_matrix_rejects_explicit_sizes(self):
+        result = self.run_processor("--zstd-shader-matrix", "--block-sizes-kb", 4)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot be combined", result.stderr)
 
     def test_chunking_records_frame_count(self):
         result = self.run_processor("--block-sizes-kb", 4, "--chunk-sizes-kb", 64)

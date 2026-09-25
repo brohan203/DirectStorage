@@ -16,8 +16,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-DEFAULT_BLOCK_SIZES_KB = (4, 8, 16)
-DEFAULT_CHUNK_SIZES_KB = (64, 128, 256)
+DEFAULT_BLOCK_SIZES_KB = (16,)
+DEFAULT_CHUNK_SIZES_KB = (256,)
+SHADER_BLOCK_SIZES_KB = (4, 8, 16)
+SHADER_CHUNK_SIZES_KB = (64, 128, 256)
 
 
 def load_driver():
@@ -260,18 +262,28 @@ def main() -> int:
     parser.add_argument("set_name")
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--zstd-exe", type=Path, required=True)
-    parser.add_argument("--block-sizes-kb", nargs="+", type=int, default=list(DEFAULT_BLOCK_SIZES_KB))
-    parser.add_argument("--chunk-sizes-kb", nargs="+", type=int, default=list(DEFAULT_CHUNK_SIZES_KB))
+    parser.add_argument(
+        "--zstd-shader-matrix", action="store_true",
+        help="explicitly generate all 4/8/16 KiB block by 64/128/256 KiB chunk variants",
+    )
+    parser.add_argument("--block-sizes-kb", nargs="+", type=int)
+    parser.add_argument("--chunk-sizes-kb", nargs="+", type=int)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--allow-version-change", action="store_true")
     args = parser.parse_args()
     try:
+        if args.zstd_shader_matrix and (args.block_sizes_kb is not None or args.chunk_sizes_kb is not None):
+            raise ValueError("--zstd-shader-matrix cannot be combined with explicit Zstd sizes")
+        block_sizes = (SHADER_BLOCK_SIZES_KB if args.zstd_shader_matrix
+                       else args.block_sizes_kb or DEFAULT_BLOCK_SIZES_KB)
+        chunk_sizes = (SHADER_CHUNK_SIZES_KB if args.zstd_shader_matrix
+                       else args.chunk_sizes_kb or DEFAULT_CHUNK_SIZES_KB)
         output = process(
             args.root,
             args.set_name,
             args.zstd_exe,
-            validate_sizes(args.block_sizes_kb, "block sizes"),
-            validate_sizes(args.chunk_sizes_kb, "chunk sizes"),
+            validate_sizes(block_sizes, "block sizes"),
+            validate_sizes(chunk_sizes, "chunk sizes"),
             args.overwrite,
             args.allow_version_change,
         )

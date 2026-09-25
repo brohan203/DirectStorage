@@ -9,11 +9,12 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+FACTORY_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = FACTORY_ROOT.parent
 
 
 def load_module():
-    path = ROOT / "Tools" / "generate-phase2-sources.py"
+    path = FACTORY_ROOT / "tools" / "generate-phase2-sources.py"
     spec = importlib.util.spec_from_file_location("generate_phase2_sources", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -33,20 +34,20 @@ def hashes(path: Path) -> dict[str, str]:
 
 
 def test_generates_deterministic_representative_sources(tmp_path: Path) -> None:
-    first = generator.generate(tmp_path, "phase2", ROOT, False)
+    first = generator.generate(tmp_path, "phase2", REPO_ROOT, False)
     first_hashes = hashes(first)
     assert set(first_hashes) == {
         "avocado.bin", "chunked.bin", "bc1.dds", "bc3.dds", "bc4.dds", "bc5.dds", "bc7.dds"
     }
     with pytest.raises(FileExistsError, match="--overwrite"):
-        generator.generate(tmp_path, "phase2", ROOT, False)
-    second = generator.generate(tmp_path, "phase2", ROOT, True)
+        generator.generate(tmp_path, "phase2", REPO_ROOT, False)
+    second = generator.generate(tmp_path, "phase2", REPO_ROOT, True)
     assert hashes(second) == first_hashes
 
 
 def test_generated_dds_files_match_supported_formats(tmp_path: Path) -> None:
-    output = generator.generate(tmp_path, "phase2", ROOT, False)
-    gacl_path = ROOT / "Tools" / "gacl_compress.py"
+    output = generator.generate(tmp_path, "phase2", REPO_ROOT, False)
+    gacl_path = FACTORY_ROOT / "tools" / "gacl_compress.py"
     spec = importlib.util.spec_from_file_location("gacl_for_generator_test", gacl_path)
     assert spec and spec.loader
     gacl = importlib.util.module_from_spec(spec)

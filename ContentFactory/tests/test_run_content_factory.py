@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOLS = ROOT / "Tools"
+FACTORY_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = FACTORY_ROOT.parent
+TOOLS = FACTORY_ROOT / "tools"
 
 
 def load(name: str, filename: str):
@@ -55,6 +56,7 @@ def arguments(root: Path, **overrides) -> Namespace:
         "stages": ["zstd", "archive"],
         "overwrite": False,
         "zstd_exe": fake_zstd(root),
+        "zstd_shader_matrix": False,
         "block_sizes_kb": [4],
         "chunk_sizes_kb": [64],
         "allow_version_change": False,
@@ -91,6 +93,31 @@ def test_runs_zstd_archive_and_final_verification(tmp_path: Path) -> None:
     assert document["derivatives"][0]["format"] == "zstd"
     assert len(document["archives"]) == 1
     assert document["archives"][0]["entries"][0]["derivative"] == document["derivatives"][0]["path"]
+
+
+def test_default_zstd_sizes_produce_one_variant_per_source(tmp_path: Path) -> None:
+    initialize(tmp_path)
+    manifest_path = orchestrator.run(arguments(
+        tmp_path, stages=["zstd"], block_sizes_kb=None, chunk_sizes_kb=None))
+    document = process_set.load_manifest(manifest_path)
+    assert len(document["derivatives"]) == 1
+    assert document["derivatives"][0]["parameters"]["block_size_kb"] == 16
+    assert document["derivatives"][0]["parameters"]["chunk_size_kb"] == 256
+
+
+def test_shader_matrix_requires_explicit_flag(tmp_path: Path) -> None:
+    initialize(tmp_path)
+    manifest_path = orchestrator.run(arguments(
+        tmp_path, stages=["zstd"], block_sizes_kb=None, chunk_sizes_kb=None,
+        zstd_shader_matrix=True))
+    document = process_set.load_manifest(manifest_path)
+    assert len(document["derivatives"]) == 9
+
+
+def test_shader_matrix_rejects_custom_sizes(tmp_path: Path) -> None:
+    initialize(tmp_path)
+    with pytest.raises(ValueError, match="cannot be combined"):
+        orchestrator.run(arguments(tmp_path, stages=["zstd"], zstd_shader_matrix=True))
 
 
 def test_gacl_is_skipped_for_non_dds_set(tmp_path: Path) -> None:

@@ -4,19 +4,15 @@ name: Content Factory Tools
   pull_request:
     paths:
     - '.github/workflows/content-factory-tools.yml'
-    - 'Docs/**'
+    - 'ContentFactory/**'
     - 'GDeflate/**'
-    - 'Tests/**'
-    - 'Tools/**'
   push:
     branches:
     - development
     paths:
     - '.github/workflows/content-factory-tools.yml'
-    - 'Docs/**'
+    - 'ContentFactory/**'
     - 'GDeflate/**'
-    - 'Tests/**'
-    - 'Tools/**'
 
 permissions:
   contents: read
@@ -33,9 +29,9 @@ jobs:
       with:
         python-version: '3.12'
         cache: pip
-        cache-dependency-path: Tests/requirements.txt
+        cache-dependency-path: ContentFactory/tests/requirements.txt
     - name: Install test dependencies
-      run: python -m pip install -r Tests/requirements.txt
+      run: python -m pip install -r ContentFactory/tests/requirements.txt
     - name: Configure GDeflate content tool
       run: >-
         cmake -S GDeflate -B ${{ runner.temp }}\gdeflate
@@ -48,7 +44,7 @@ jobs:
     - name: Run Python tests
       env:
         GDEFLATE_CONTENT_TOOL: ${{ runner.temp }}\gdeflate\GDeflateContentTool\Release\GDeflateContentTool.exe
-      run: python -m pytest Tests -q
+      run: python -m pytest ContentFactory/tests -q
 
   gacl-content-tool:
     runs-on: windows-2025
@@ -70,7 +66,7 @@ jobs:
         git -C "${{ runner.temp }}\gacl" submodule update --init --depth 1 ThirdParty/zstd
     - name: Configure GACL content tool
       run: >-
-        cmake -S Tools/GACLContentTool -B ${{ runner.temp }}\gacl-content
+        cmake -S ContentFactory/GACLContentTool -B ${{ runner.temp }}\gacl-content
         -A ${{ matrix.architecture }}
         -DGACL_ROOT=${{ runner.temp }}\gacl
     - name: Build GACL content tool
@@ -79,7 +75,7 @@ jobs:
       if: matrix.architecture == 'x64'
       env:
         GACL_CONTENT_TOOL: ${{ runner.temp }}\gacl-content\Release\GACLContentTool.exe
-      run: python -m unittest Tests.test_gacl_content_tool -v
+      run: python -m pytest ContentFactory/tests/test_gacl_content_tool.py -v
 
   end-to-end-content-factory:
     runs-on: windows-2025
@@ -89,7 +85,7 @@ jobs:
       with:
         python-version: '3.12'
     - name: Install test dependencies
-      run: python -m pip install -r Tests/requirements.txt
+      run: python -m pip install -r ContentFactory/tests/requirements.txt
     - name: Clone pinned GACL and Zstd sources
       shell: pwsh
       run: |
@@ -108,7 +104,7 @@ jobs:
     - name: Build GACL content tool
       shell: pwsh
       run: |
-        cmake -S Tools/GACLContentTool -B "${{ runner.temp }}\gacl-content" -A x64 `
+        cmake -S ContentFactory/GACLContentTool -B "${{ runner.temp }}\gacl-content" -A x64 `
           -DGACL_ROOT="${{ runner.temp }}\gacl"
         cmake --build "${{ runner.temp }}\gacl-content" --config Release --target GACLContentTool --parallel
     - name: Build pinned Zstd CLI
@@ -126,15 +122,15 @@ jobs:
       shell: pwsh
       run: |
         $root = "${{ runner.temp }}\content-factory"
-        python Tools\generate-phase2-sources.py phase2-representative --root $root
-        python Tools\process-set.py phase2-representative --root $root
-        python Tools\run-content-factory.py phase2-representative `
+        python ContentFactory\tools\generate-phase2-sources.py phase2-representative --root $root
+        python ContentFactory\tools\process-set.py phase2-representative --root $root
+        python ContentFactory\tools\run-content-factory.py phase2-representative `
           --root $root `
           --stages all `
           --zstd-exe "${{ runner.temp }}\zstd-cli\programs\Release\zstd.exe" `
           --gdeflate-exe "${{ runner.temp }}\gdeflate\GDeflateContentTool\Release\GDeflateContentTool.exe" `
           --gacl-exe "${{ runner.temp }}\gacl-content\Release\GACLContentTool.exe"
-        python Tools\process-set.py phase2-representative --root $root --verify
+        python ContentFactory\tools\process-set.py phase2-representative --root $root --verify
     - name: Capture generated hashes
       shell: pwsh
       run: |
@@ -152,14 +148,14 @@ jobs:
       shell: pwsh
       run: |
         $root = "${{ runner.temp }}\content-factory"
-        python Tools\run-content-factory.py phase2-representative `
+        python ContentFactory\tools\run-content-factory.py phase2-representative `
           --root $root `
           --stages all `
           --overwrite `
           --zstd-exe "${{ runner.temp }}\zstd-cli\programs\Release\zstd.exe" `
           --gdeflate-exe "${{ runner.temp }}\gdeflate\GDeflateContentTool\Release\GDeflateContentTool.exe" `
           --gacl-exe "${{ runner.temp }}\gacl-content\Release\GACLContentTool.exe"
-        python Tools\process-set.py phase2-representative --root $root --verify
+        python ContentFactory\tools\process-set.py phase2-representative --root $root --verify
         $rootUri = [Uri]((Resolve-Path -LiteralPath $root).Path.TrimEnd('\') + '\')
         $after = Get-ChildItem -LiteralPath $root -File -Recurse |
           Where-Object { $_.Name -notlike '*.lock' } |

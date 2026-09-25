@@ -10,9 +10,10 @@ from pathlib import Path
 import jsonschema
 
 
-ROOT = Path(__file__).resolve().parents[1]
-DRIVER = ROOT / "Tools" / "process-set.py"
-SCHEMA = ROOT / "Tools" / "content-set-manifest.schema.json"
+FACTORY_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = FACTORY_ROOT.parent
+DRIVER = FACTORY_ROOT / "tools" / "process-set.py"
+SCHEMA = FACTORY_ROOT / "tools" / "content-set-manifest.schema.json"
 
 
 def load_driver():

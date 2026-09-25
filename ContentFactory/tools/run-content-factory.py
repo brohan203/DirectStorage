@@ -73,10 +73,16 @@ def run(args: argparse.Namespace) -> Path:
         if args.zstd_exe is None:
             raise ValueError("--zstd-exe is required for the zstd stage")
         module = load_module("zstd_for_orchestration", "zstd_compress.py")
+        if args.zstd_shader_matrix and (args.block_sizes_kb is not None or args.chunk_sizes_kb is not None):
+            raise ValueError("--zstd-shader-matrix cannot be combined with explicit Zstd sizes")
+        block_sizes = (module.SHADER_BLOCK_SIZES_KB if args.zstd_shader_matrix
+                       else args.block_sizes_kb or module.DEFAULT_BLOCK_SIZES_KB)
+        chunk_sizes = (module.SHADER_CHUNK_SIZES_KB if args.zstd_shader_matrix
+                       else args.chunk_sizes_kb or module.DEFAULT_CHUNK_SIZES_KB)
         manifest_path = module.process(
             root, set_name, args.zstd_exe,
-            module.validate_sizes(args.block_sizes_kb, "block sizes"),
-            module.validate_sizes(args.chunk_sizes_kb, "chunk sizes"),
+            module.validate_sizes(block_sizes, "block sizes"),
+            module.validate_sizes(chunk_sizes, "chunk sizes"),
             args.overwrite, args.allow_version_change,
         )
     if "gdeflate" in stages:
@@ -130,8 +136,12 @@ def main() -> int:
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--zstd-exe", type=Path)
-    parser.add_argument("--block-sizes-kb", nargs="+", type=int, default=[4, 8, 16])
-    parser.add_argument("--chunk-sizes-kb", nargs="+", type=int, default=[64, 128, 256])
+    parser.add_argument(
+        "--zstd-shader-matrix", action="store_true",
+        help="explicitly generate all 4/8/16 KiB block by 64/128/256 KiB chunk Zstd variants",
+    )
+    parser.add_argument("--block-sizes-kb", nargs="+", type=int)
+    parser.add_argument("--chunk-sizes-kb", nargs="+", type=int)
     parser.add_argument("--allow-version-change", action="store_true")
     parser.add_argument("--gdeflate-exe", type=Path)
     parser.add_argument("--gdeflate-levels", nargs="+", type=int, default=list(range(1, 13)))

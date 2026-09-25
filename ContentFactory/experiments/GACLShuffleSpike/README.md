@@ -27,7 +27,7 @@ Pass the pinned GACL checkout explicitly; the build never downloads a dependency
 $cmake = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
 
 & $cmake `
-  -S Tools/GACLShuffleSpike `
+  -S ContentFactory/experiments/GACLShuffleSpike `
   -B out/gacl-shuffle-spike `
   -G 'Visual Studio 17 2022' `
   -A x64 `

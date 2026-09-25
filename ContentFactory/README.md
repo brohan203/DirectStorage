@@ -1,6 +1,6 @@
 # Content Factory tooling
 
-The Phase 2 Content Factory prepares deterministic codec inputs and DirectStorage archives outside CI. CI consumes generated products; it does not regenerate them.
+The Phase 2 Content Factory prepares deterministic codec inputs and DirectStorage archives. The Content Factory workflow independently generates a synthetic representative set inside CI; production content stays outside CI.
 
 ## Folder layout
 
@@ -23,27 +23,27 @@ Set names may contain letters, digits, `.`, `_`, and `-`. Source trees may conta
 Put source files under `originals/<set-name>/`, then run:
 
 ```powershell
-python Tools\process-set.py <set-name> --root C:\content-factory
+python ContentFactory\tools\process-set.py <set-name> --root C:\content-factory
 ```
 
 The driver inventories every source file, computes SHA-256 values, creates the format directories, validates the document, and atomically writes `manifests/<set-name>.json`.
 
 The driver establishes the source and manifest contract. Codec stages append verified `derivatives` records for Zstd, GDeflate, and GACL, plus ordered `archives` records for DirectStorage packages.
 
-Generate the required Zstd 3×3 matrix with an explicit Zstd CLI:
+By default, the Zstd stage produces one 16 KiB target-block / 256 KiB frame-chunk variant per source:
 
 ```powershell
-python Tools\zstd_compress.py <set-name> `
+python ContentFactory\tools\zstd_compress.py <set-name> `
   --root C:\content-factory `
   --zstd-exe C:\tools\zstd.exe
 ```
 
-The processor creates 4/8/16 KiB target-block variants crossed with 64/128/256 KiB frame chunks. Each chunk is one Zstd frame, the concatenated stream is decoded and byte-compared with its source before installation, and the output tree plus manifest are replaced transactionally. Use `--overwrite` for a deterministic rebuild. A changed Zstd version requires the additional explicit `--allow-version-change` flag.
+For sets specifically targeting the Zstd shader and metacommand matrix, explicitly request all 4/8/16 KiB block × 64/128/256 KiB chunk combinations with `--zstd-shader-matrix`. Alternatively supply `--block-sizes-kb` and `--chunk-sizes-kb` for selected combinations; the matrix flag and explicit sizes cannot be combined. The factory orchestrator accepts the same options. Each chunk is one Zstd frame; the concatenated stream is decoded and byte-compared with its source before transactional installation. Use `--overwrite` for a deterministic rebuild. A changed Zstd version requires the additional explicit `--allow-version-change` flag.
 
 Generate GDeflate variants with the built content tool:
 
 ```powershell
-python Tools\gdeflate_compress.py <set-name> `
+python ContentFactory\tools\gdeflate_compress.py <set-name> `
   --root C:\content-factory `
   --gdeflate-exe C:\build\GDeflateContentTool.exe
 ```
@@ -53,7 +53,7 @@ By default, the processor creates levels 1 through 12 for every source. Use `--l
 Generate BC1/BC3/BC4/BC5/BC7 GACL derivatives with the reduced production tool:
 
 ```powershell
-python Tools\gacl_compress.py <set-name> `
+python ContentFactory\tools\gacl_compress.py <set-name> `
   --root C:\content-factory `
   --gacl-exe C:\build\GACLContentTool.exe
 ```
@@ -63,7 +63,7 @@ Phase 2 conditions array item 0 / mip 0 and records the DDS format, dimensions, 
 Create the spec-compatible HLK content triplet from the ordered source set:
 
 ```powershell
-python Tools\hlk_content_set.py <set-name> `
+python ContentFactory\tools\hlk_content_set.py <set-name> `
   --root C:\content-factory `
   --zstd-exe C:\tools\zstd.exe `
   --gdeflate-exe C:\build\GDeflateContentTool.exe
@@ -74,7 +74,7 @@ This produces lockstep `dstoragetest.uncompressed`, `dstoragetest.gdeflate`, and
 Run the complete workflow in dependency order:
 
 ```powershell
-python Tools\run-content-factory.py <set-name> `
+python ContentFactory\tools\run-content-factory.py <set-name> `
   --root C:\content-factory `
   --stages all `
   --zstd-exe C:\tools\zstd.exe `
@@ -82,14 +82,16 @@ python Tools\run-content-factory.py <set-name> `
   --gacl-exe C:\build\GACLContentTool.exe
 ```
 
-Generate the deterministic representative source set with `Tools\generate-phase2-sources.py`. It combines the repository's `Avocado.bin`, a chunking workload, and BC1/BC3/BC4/BC5/BC7 DDS fixtures.
+The orchestrator normally generates one 16/256 KiB Zstd configuration per source; add `--zstd-shader-matrix` only for Zstd shader/metacommand coverage sets.
+
+Generate the deterministic representative source set with `ContentFactory\tools\generate-phase2-sources.py`. It combines the repository's `Avocado.bin`, a chunking workload, and BC1/BC3/BC4/BC5/BC7 DDS fixtures. Run `ContentFactory\tools\process-set.py <set-name> --root <root>` afterward to create its manifest before running the orchestrator.
 
 Use `--overwrite` for intentional deterministic rebuilds. The manifest contains no timestamps and uses stable sorting and serialization, so unchanged sources produce byte-identical output.
 
 ## Verify a set
 
 ```powershell
-python Tools\process-set.py <set-name> --root C:\content-factory --verify
+python ContentFactory\tools\process-set.py <set-name> --root C:\content-factory --verify
 ```
 
 Verification checks:
@@ -105,7 +107,7 @@ Verification fails if sources were added, removed, renamed, or modified after ma
 
 ## Manifest contract
 
-`Tools/content-set-manifest.schema.json` is the machine-readable schema. Important sections are:
+`ContentFactory/tools/content-set-manifest.schema.json` is the machine-readable schema. Important sections are:
 
 - `sources` — original relative path, byte size, and SHA-256
 - `derivatives` — source relationship, output format, codec parameters, optional format metadata, and validation state
@@ -117,11 +119,11 @@ GACL derivative metadata is expected to carry DXGI format, dimensions, array ite
 ## Related tools
 
 - `GDeflate/GDeflateContentTool` generates and verifies standalone GDeflate content.
-- `Tools/GACLContentTool` generates and verifies production BC1/3/4/5/BC7 GACL payloads.
-- `Tools/GACLShuffleSpike` retains the exploratory compression comparison harness.
-- `Tools/hlk_content_set.py` creates the spec-compatible lockstep HLK archive triplet.
-- `Tools/create_hlk_archive.py` is the deterministic low-level archive writer.
-- `Tools/validate_hlk_archive.py` validates and extracts archive payloads.
+- `ContentFactory/GACLContentTool` generates and verifies production BC1/3/4/5/BC7 GACL payloads.
+- `ContentFactory/experiments/GACLShuffleSpike` retains the exploratory compression comparison harness.
+- `ContentFactory/tools/hlk_content_set.py` creates the spec-compatible lockstep HLK archive triplet.
+- `ContentFactory/tools/create_hlk_archive.py` is the deterministic low-level archive writer.
+- `ContentFactory/tools/validate_hlk_archive.py` validates and extracts archive payloads.
 
 ## Just ask any agent
 

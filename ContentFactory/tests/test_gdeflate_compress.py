@@ -8,9 +8,10 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
-DRIVER = ROOT / "Tools" / "process-set.py"
-PROCESSOR = ROOT / "Tools" / "gdeflate_compress.py"
+FACTORY_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = FACTORY_ROOT.parent
+DRIVER = FACTORY_ROOT / "tools" / "process-set.py"
+PROCESSOR = FACTORY_ROOT / "tools" / "gdeflate_compress.py"
 
 
 class GDeflateCompressTests(unittest.TestCase):

@@ -7,8 +7,9 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
-VALIDATOR = ROOT / "Tools" / "validate_hlk_archive.py"
+FACTORY_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = FACTORY_ROOT.parent
+VALIDATOR = FACTORY_ROOT / "tools" / "validate_hlk_archive.py"
 HEADER = struct.Struct("<II")
 ENTRY = struct.Struct("<III")
 

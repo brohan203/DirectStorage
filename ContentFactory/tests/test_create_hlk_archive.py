@@ -6,9 +6,10 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
-CREATOR = ROOT / "Tools" / "create_hlk_archive.py"
-VALIDATOR = ROOT / "Tools" / "validate_hlk_archive.py"
+FACTORY_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = FACTORY_ROOT.parent
+CREATOR = FACTORY_ROOT / "tools" / "create_hlk_archive.py"
+VALIDATOR = FACTORY_ROOT / "tools" / "validate_hlk_archive.py"
 
 
 class HlkArchiveCreatorTests(unittest.TestCase):
